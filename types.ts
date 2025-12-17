@@ -10,6 +10,12 @@ export interface AudioSettings {
   isTheaterMode: boolean;
   isHeadTrackingEnabled: boolean;
   isDolbyVisionEnabled: boolean;
+  // New Surround Settings
+  surroundLevel: number;
+  heightLevel: number;
+  drc: number; // Dynamic Range Compression
+  lfeCrossover: number;
+  centerSpread: number;
 }
 
 export interface SpeakerPosition {

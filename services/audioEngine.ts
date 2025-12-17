@@ -14,31 +14,34 @@ export class AudioEngine {
   async init(element: HTMLMediaElement) {
     if (this.context) return;
     
-    this.context = new (window.AudioContext || (window as any).webkitAudioContext)();
+    this.context = new (window.AudioContext || (window as any).webkitAudioContext)({
+      latencyHint: 'interactive'
+    });
     this.source = this.context.createMediaElementSource(element);
     
     this.gainNode = this.context.createGain();
     this.analyser = this.context.createAnalyser();
-    this.analyser.fftSize = 512;
+    this.analyser.fftSize = 256; // Smaller for faster UI response
 
+    // Dialogue Presence: High Q peaking filter at 3.2kHz for vocal articulation
     this.vocalFilter = this.context.createBiquadFilter();
     this.vocalFilter.type = 'peaking';
     this.vocalFilter.frequency.value = 3200;
-    this.vocalFilter.Q.value = 1.2;
+    this.vocalFilter.Q.value = 1.4; 
     this.vocalFilter.gain.value = 0;
 
     this.bassFilter = this.context.createBiquadFilter();
     this.bassFilter.type = 'lowshelf';
-    this.bassFilter.frequency.value = 180;
+    this.bassFilter.frequency.value = 150;
 
     this.trebleFilter = this.context.createBiquadFilter();
     this.trebleFilter.type = 'highshelf';
-    this.trebleFilter.frequency.value = 4500;
+    this.trebleFilter.frequency.value = 5000;
 
     this.theaterBoost = this.context.createBiquadFilter();
     this.theaterBoost.type = 'peaking';
-    this.theaterBoost.frequency.value = 55;
-    this.theaterBoost.Q.value = 0.8;
+    this.theaterBoost.frequency.value = 45; // Sub-bass "punch"
+    this.theaterBoost.Q.value = 0.7;
     this.theaterBoost.gain.value = 0;
 
     this.absorptionFilter = this.context.createBiquadFilter();
@@ -50,14 +53,15 @@ export class AudioEngine {
     this.panner.distanceModel = 'inverse';
     this.panner.refDistance = 1;
     this.panner.maxDistance = 10000;
-    this.panner.rolloffFactor = 1.5;
+    this.panner.rolloffFactor = 2.0;
 
-    // Direct Signal Chain: Source -> EQs -> Panner -> Absorption -> Gain -> Analyser -> Out
+    // Routing Chain: 
+    // Source -> Global EQ (Bass/Treble) -> Theater Sub EQ -> Vocal Clarity -> Spatial Panner -> Air Absorption -> Gain -> Analyser -> Output
     this.source
-      .connect(this.vocalFilter)
       .connect(this.bassFilter)
       .connect(this.trebleFilter)
       .connect(this.theaterBoost)
+      .connect(this.vocalFilter)
       .connect(this.panner)
       .connect(this.absorptionFilter)
       .connect(this.gainNode)
@@ -66,7 +70,7 @@ export class AudioEngine {
   }
 
   setVolume(value: number) {
-    if (this.gainNode) this.gainNode.gain.setTargetAtTime(value, this.context!.currentTime, 0.1);
+    if (this.gainNode) this.gainNode.gain.setTargetAtTime(value, this.context!.currentTime, 0.05);
   }
 
   setBass(value: number) {
@@ -83,8 +87,9 @@ export class AudioEngine {
 
   setTheaterMode(enabled: boolean) {
     if (this.theaterBoost) {
-      const bassGain = enabled ? 12 : 0;
-      this.theaterBoost.gain.setTargetAtTime(bassGain, this.context!.currentTime, 0.2);
+      // Powerful sub-frequency lift for theater feel
+      const boost = enabled ? 10 : 0;
+      this.theaterBoost.gain.setTargetAtTime(boost, this.context!.currentTime, 0.2);
     }
   }
 
@@ -100,8 +105,9 @@ export class AudioEngine {
       this.panner.positionY.setTargetAtTime(py, time, 0.1);
       this.panner.positionZ.setTargetAtTime(pz, time, 0.1);
 
+      // Distance-based high frequency attenuation (air absorption simulation)
       const distance = Math.sqrt(px*px + py*py + pz*pz);
-      const airAbsorptionFreq = Math.max(2000, 20000 * Math.exp(-distance * 0.12));
+      const airAbsorptionFreq = Math.max(3000, 20000 * Math.exp(-distance * 0.15));
       this.absorptionFilter.frequency.setTargetAtTime(airAbsorptionFreq, time, 0.15);
     }
   }

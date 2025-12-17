@@ -4,25 +4,39 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AtmosSphere - Spatial Audio</title>
+  <title>AtmosSphere - Pro Cinema Spatial Audio</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body {
-      background-color: #0a0a0c;
-      color: #e2e8f0;
+      background-color: #020205;
+      color: #f8fafc;
       overflow-x: hidden;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
     .glass {
-      background: rgba(15, 15, 20, 0.7);
-      backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(10, 10, 15, 0.4);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
     }
-    .neon-text {
-      text-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+    .dolby-vision-active {
+      filter: contrast(1.12) saturate(1.3) brightness(1.08) hue-rotate(-2deg);
+      transition: filter 0.8s cubic-bezier(0.4, 0, 0.2, 1);
     }
     .dolby-gradient {
-      background: linear-gradient(135deg, #00c6ff 0%, #0072ff 100%);
+      background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%);
+    }
+    .knob-shadow {
+      box-shadow: 0 0 20px rgba(37, 99, 235, 0.2), inset 0 0 10px rgba(0, 0, 0, 0.5);
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #020205;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 10px;
     }
   </style>
 <script type="importmap">

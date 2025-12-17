@@ -1,0 +1,8 @@
+{
+  "name": "AtmosSphere: AI Spatial Audio Master",
+  "description": "A high-fidelity spatial audio and surround sound simulator with AI-powered EQ optimization and Atmos-ready visualization.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

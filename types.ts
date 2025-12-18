@@ -7,6 +7,7 @@ export interface AudioSettings {
   spatiality: number;
   reverbLevel: number; // New separate option for Reverb/Ambience
   isAtmosEnabled: boolean;
+  isHdAudioEnabled: boolean; // New HD Audio toggle
   selectedPreset: string;
   isTheaterMode: boolean;
   isHeadTrackingEnabled: boolean;

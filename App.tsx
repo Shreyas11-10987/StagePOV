@@ -25,13 +25,14 @@ const StagePOVLogo = ({ isTheater }: { isTheater: boolean }) => (
 
 const App: React.FC = () => {
   const [settings, setSettings] = useState<AudioSettings>({
-    volume: 1.8, // Default to 180% volume for immediate loudness
+    volume: 1.8, 
     bass: 0, 
-    treble: 2, // Slight air boost for clarity
-    vocalClarity: 5, // Neutral presence
+    treble: 2, 
+    vocalClarity: 5, 
     spatiality: 0.8,
-    reverbLevel: 0, // Default to 0 for Clean/Dry Music playback
+    reverbLevel: 0, 
     isAtmosEnabled: true, selectedPreset: 'Pure Direct', isTheaterMode: false,
+    isHdAudioEnabled: false, // Default HD Audio OFF
     isHeadTrackingEnabled: false, isDolbyVisionEnabled: false, surroundLevel: 0.7,
     heightLevel: 0.5, drc: 0.1, lfeCrossover: 80, centerSpread: 0.4,
     speakerDelay: 0,
@@ -71,7 +72,7 @@ const App: React.FC = () => {
   const vaultInputRef = useRef<HTMLInputElement>(null);
   const restoreTimeRef = useRef(0);
 
-  // Sync restoreTimeRef with currentTime state so we can recover position after audio element unmount
+  // Sync restoreTimeRef with currentTime state
   useEffect(() => {
     restoreTimeRef.current = currentTime;
   }, [currentTime]);
@@ -83,9 +84,8 @@ const App: React.FC = () => {
       audioEngine.init(mediaRef.current, settings.sampleRate, settings.bitDepth).then(() => {
         updateEngine();
         
-        // Restore playback state after engine re-init (which likely caused audio element remount)
         if (mediaRef.current) {
-          if (resumeTime > 0.5) { // Only restore if significant progress
+          if (resumeTime > 0.5) { 
              mediaRef.current.currentTime = resumeTime;
           }
           if (isPlaying) mediaRef.current.play();
@@ -109,6 +109,7 @@ const App: React.FC = () => {
     audioEngine.setVocalClarity(settings.vocalClarity);
     audioEngine.setReverb(settings.reverbLevel);
     audioEngine.setTheaterMode(settings.isTheaterMode);
+    audioEngine.setHdMode(settings.isHdAudioEnabled); // Update HD Mode
     audioEngine.setDRC(settings.drc);
     audioEngine.setHeightLevel(settings.heightLevel);
     audioEngine.setLfeCrossover(settings.lfeCrossover);
@@ -118,17 +119,16 @@ const App: React.FC = () => {
     // CENTROID CALCULATION
     const activeSpeakers = speakers.filter(s => s.isActive);
     if (activeSpeakers.length > 0) {
-      let sumX = 0, sumY = 0, sumZ = 0;
+      let sumY = 0, sumZ = 0;
       activeSpeakers.forEach(s => {
-        sumX += s.x;
+        // sumX excluded to enforce center anchor
         sumY += s.y;
         sumZ += s.z;
       });
-      const cx = sumX / activeSpeakers.length;
+      // Force X to 0 to keep sound center-anchored regardless of speaker distribution
+      const cx = 0; 
       const cy = sumY / activeSpeakers.length;
       const cz = sumZ / activeSpeakers.length;
-      
-      // Position the source at the calculated centroid of the speaker array
       audioEngine.setSpatialPosition(cx, cy, cz === 0 ? 0.5 : cz);
     } else {
       audioEngine.setSpatialPosition(0, 0, 1);
@@ -160,20 +160,18 @@ const App: React.FC = () => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    // If multiple files are selected in Deck view, auto-save them to vault
     if (files.length > 1) {
       await handleVaultUpload(e);
       alert(`${files.length} masters secured in Vault.`);
       return;
     }
 
-    // Single file logic (Preview Mode)
     const file = files[0];
     if (mediaData?.url && !mediaData.id) URL.revokeObjectURL(mediaData.url);
     const url = URL.createObjectURL(file);
     setMediaData({ name: file.name.replace(/\.[^/.]+$/, ""), url });
     setIsPlaying(false);
-    setPlaybackQueue([]); // Clear queue on manual load
+    setPlaybackQueue([]); 
   };
 
   const handleVaultUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -199,7 +197,6 @@ const App: React.FC = () => {
       console.error("Bulk Save Error:", err);
     } finally {
       setIsSaving(false);
-      // Reset input value to allow selecting the same files again if needed
       if (e.target) e.target.value = '';
     }
   };
@@ -233,7 +230,6 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(song.blob);
     setMediaData({ name: song.name, url, id: song.id });
     
-    // If a queue is provided, set it (excluding the current song which is playing)
     if (queue.length > 0) {
       const index = queue.findIndex(s => s.id === song.id);
       if (index !== -1 && index < queue.length - 1) {
@@ -282,8 +278,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Playlist Management Logic ---
-
   const toggleSelectionMode = () => {
     setIsSelectionMode(!isSelectionMode);
     setSelectedSongIds(new Set());
@@ -313,12 +307,9 @@ const App: React.FC = () => {
     await refreshVault();
   };
 
-  // --- Sorting & Filtering Logic ---
-  
   const filteredAndSortedSongs = useMemo(() => {
     let result = [...vaultSongs];
 
-    // Filter by Playlist if selected
     if (selectedPlaylistId) {
       const pl = playlists.find(p => p.id === selectedPlaylistId);
       if (pl) {
@@ -327,22 +318,19 @@ const App: React.FC = () => {
       }
     }
 
-    // Filter by Search
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       result = result.filter(s => s.name.toLowerCase().includes(q));
     }
 
-    // Sort
     result.sort((a, b) => {
       if (sortBy === 'name') return a.name.localeCompare(b.name);
       if (sortBy === 'size') return b.size - a.size;
-      return b.dateAdded - a.dateAdded; // default date
+      return b.dateAdded - a.dateAdded; 
     });
 
     return result;
   }, [vaultSongs, playlists, selectedPlaylistId, searchQuery, sortBy]);
-
 
   const NavItem = ({ id, label, icon }: { id: typeof activeView, label: string, icon: React.ReactNode }) => (
     <button 
@@ -785,6 +773,8 @@ const App: React.FC = () => {
                  </div>
 
                  <ToggleSwitch label="Theater Mode" enabled={settings.isTheaterMode} onToggle={() => setSettings(p => ({...p, isTheaterMode: !p.isTheaterMode}))} />
+                 {/* New HD Audio Switch */}
+                 <ToggleSwitch label="HD Audio (Hi-Res)" enabled={settings.isHdAudioEnabled} onToggle={() => setSettings(p => ({...p, isHdAudioEnabled: !p.isHdAudioEnabled}))} />
               </section>
            </div>
         </div>

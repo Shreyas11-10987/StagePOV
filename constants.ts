@@ -45,7 +45,7 @@ export const SPEAKER_LAYOUTS: Record<string, SpeakerPosition[]> = {
     { id: 'TFR', name: 'Top Front Right', x: 0.8, y: 1, z: 0.8, isActive: true },
     { id: 'TRL', name: 'Top Rear Left', x: -0.8, y: 1, z: -0.8, isActive: true },
     { id: 'TRR', name: 'Top Rear Right', x: 0.8, y: 1, z: -0.8, isActive: true },
-    { id: 'LFE', name: 'Subwoofer', x: 0.5, y: -0.5, z: 0.8, isActive: true },
+    { id: 'LFE', name: 'Subwoofer', x: 0, y: -0.5, z: 0.8, isActive: true },
   ]
 };
 

@@ -15,6 +15,11 @@ export class AudioEngine {
   private lfeCrossover: BiquadFilterNode | null = null;
   private delayNode: DelayNode | null = null;
 
+  // HD Audio Nodes
+  private hdLowFilter: BiquadFilterNode | null = null;
+  private hdHighFilter: BiquadFilterNode | null = null;
+  private hdMidDip: BiquadFilterNode | null = null;
+
   // Cinematic Space nodes
   private reverbNode: ConvolverNode | null = null;
   private dryGain: GainNode | null = null;
@@ -104,6 +109,23 @@ export class AudioEngine {
     this.lfeCrossover.frequency.value = 80;
     this.lfeCrossover.gain.value = 0;
 
+    // HD Audio Filters - The "Smile" Curve + Clarity
+    this.hdLowFilter = this.context.createBiquadFilter();
+    this.hdLowFilter.type = 'lowshelf';
+    this.hdLowFilter.frequency.value = 60; // Deep Sub
+    this.hdLowFilter.gain.value = 0;
+
+    this.hdMidDip = this.context.createBiquadFilter();
+    this.hdMidDip.type = 'peaking';
+    this.hdMidDip.frequency.value = 500; // Boxy frequency
+    this.hdMidDip.gain.value = 0;
+    this.hdMidDip.Q.value = 1.0;
+
+    this.hdHighFilter = this.context.createBiquadFilter();
+    this.hdHighFilter.type = 'highshelf';
+    this.hdHighFilter.frequency.value = 12000; // Air / Sparkle
+    this.hdHighFilter.gain.value = 0;
+
     // REVERB - Clearer Impulse Response
     this.reverbNode = this.context.createConvolver();
     this.reverbNode.buffer = this.createImpulseResponse(1.2, 3.0); // Shorter, brighter reverb
@@ -125,7 +147,7 @@ export class AudioEngine {
     this.panner.rolloffFactor = 0.5; // Gentler volume drop-off
 
     // UPDATED SIGNAL PATH: Maximizer Topology
-    // Source -> EQ -> Split/Sum -> Panner -> Gain (Volume Drive) -> Compressor (Limiter) -> Out
+    // Source -> Standard EQ -> HD EQ -> Split/Sum -> Panner -> Gain -> Compressor -> Out
     
     this.source
       .connect(this.midFilter)
@@ -133,11 +155,14 @@ export class AudioEngine {
       .connect(this.trebleFilter)
       .connect(this.xCurveFilter)
       .connect(this.heightFilter)
-      .connect(this.lfeCrossover);
+      .connect(this.lfeCrossover)
+      .connect(this.hdLowFilter)
+      .connect(this.hdMidDip)
+      .connect(this.hdHighFilter);
 
-    // Split point
-    this.lfeCrossover.connect(this.dryGain);
-    this.lfeCrossover.connect(this.reverbNode);
+    // Split point from last filter
+    this.hdHighFilter.connect(this.dryGain);
+    this.hdHighFilter.connect(this.reverbNode);
     this.reverbNode.connect(this.wetGain);
 
     // Sum point
@@ -145,7 +170,6 @@ export class AudioEngine {
     this.wetGain.connect(this.delayNode);
 
     // Master bus
-    // Note: gainNode is now BEFORE compressor to allow driving into the limiter
     this.delayNode
       .connect(this.panner)
       .connect(this.gainNode) 
@@ -172,7 +196,6 @@ export class AudioEngine {
   }
 
   setVolume(value: number) {
-    // Direct gain control. Since it hits the limiter next, higher values = louder perceived volume
     if (this.gainNode && this.context) this.gainNode.gain.setTargetAtTime(value, this.context.currentTime, 0.05);
   }
 
@@ -185,7 +208,6 @@ export class AudioEngine {
   }
 
   setVocalClarity(value: number) {
-    // value 0-10, map to gain -2 to +8dB
     if (this.midFilter && this.context) {
       const gain = (value - 5) * 2; 
       this.midFilter.gain.setTargetAtTime(gain, this.context.currentTime, 0.1);
@@ -199,11 +221,25 @@ export class AudioEngine {
   }
 
   setDRC(value: number) {
-    // In this new topology, DRC controls the Limiter Threshold. 
-    // Higher DRC = Lower Threshold = More "Squashed" / Safer
     if (this.compressor && this.context) {
       const threshold = -0.5 - (value * 12); 
       this.compressor.threshold.setTargetAtTime(threshold, this.context.currentTime, 0.1);
+    }
+  }
+
+  setHdMode(enabled: boolean) {
+    if (!this.context) return;
+    const time = this.context.currentTime;
+    
+    if (enabled) {
+      // "Hi-Res" Contour: Deep lows, clear highs, removed mud.
+      this.hdLowFilter?.gain.setTargetAtTime(4, time, 0.2); // +4dB Sub
+      this.hdMidDip?.gain.setTargetAtTime(-3, time, 0.2);  // -3dB Boxiness (Clean mids)
+      this.hdHighFilter?.gain.setTargetAtTime(6, time, 0.2); // +6dB Air/Sparkle
+    } else {
+      this.hdLowFilter?.gain.setTargetAtTime(0, time, 0.2);
+      this.hdMidDip?.gain.setTargetAtTime(0, time, 0.2);
+      this.hdHighFilter?.gain.setTargetAtTime(0, time, 0.2);
     }
   }
 
@@ -213,12 +249,10 @@ export class AudioEngine {
     
     if (enabled) {
       this.xCurveFilter?.gain.setTargetAtTime(-1.5, time, 0.5); 
-      // Removed automatic wetGain manipulation to allow manual control
       this.bassFilter?.gain.setTargetAtTime(4, time, 0.5); 
       this.midFilter?.gain.setTargetAtTime(3, time, 0.5); 
     } else {
       this.xCurveFilter?.gain.setTargetAtTime(0, time, 0.5);
-      // Removed automatic wetGain manipulation
       this.bassFilter?.gain.setTargetAtTime(0, time, 0.5);
       this.midFilter?.gain.setTargetAtTime(0, time, 0.5);
     }
@@ -228,7 +262,6 @@ export class AudioEngine {
     if (!this.context) return;
     const time = this.context.currentTime;
     
-    // Removed wetGain reset here
     this.bassFilter?.gain.setTargetAtTime(0, time, 0.2);
     this.trebleFilter?.gain.setTargetAtTime(0, time, 0.2);
     this.midFilter?.gain.setTargetAtTime(0, time, 0.2);
@@ -238,7 +271,6 @@ export class AudioEngine {
         this.bassFilter?.gain.setTargetAtTime(8, time, 0.2);
         this.midFilter?.gain.setTargetAtTime(3, time, 0.2);
         this.trebleFilter?.gain.setTargetAtTime(2, time, 0.2);
-        // Reverb changes removed
         this.reverbNode!.buffer = this.createImpulseResponse(2.5, 1.5);
         break;
       case 'THX Reference':
@@ -253,7 +285,6 @@ export class AudioEngine {
         this.xCurveFilter?.gain.setTargetAtTime(-4, time, 0.2);
         break;
       case 'Pure Direct':
-        // Flat response
         break;
     }
   }

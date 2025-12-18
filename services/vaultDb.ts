@@ -1,24 +1,12 @@
 
-export interface VaultSong {
-  id: string;
-  name: string;
-  blob: Blob;
-  size: number;
-  type: string;
-  dateAdded: number;
-}
+import { VaultMedia, VaultPlaylist } from '../types';
 
-export interface VaultPlaylist {
-  id: string;
-  name: string;
-  songIds: string[];
-  dateCreated: number;
-}
+export type { VaultMedia, VaultPlaylist };
 
 class VaultDb {
   private dbName = 'StagePOV_Vault';
-  private version = 2; // Upgraded version
-  private songStore = 'songs';
+  private version = 3; // Version bump for schema change
+  private mediaStore = 'media';
   private playlistStore = 'playlists';
 
   private async getDb(): Promise<IDBDatabase> {
@@ -29,10 +17,16 @@ class VaultDb {
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
         
-        if (!db.objectStoreNames.contains(this.songStore)) {
-          db.createObjectStore(this.songStore, { keyPath: 'id' });
+        // Create media store if it doesn't exist
+        if (!db.objectStoreNames.contains(this.mediaStore)) {
+          db.createObjectStore(this.mediaStore, { keyPath: 'id' });
         }
         
+        // Handle migration from old 'songs' store if necessary
+        if (db.objectStoreNames.contains('songs')) {
+           db.deleteObjectStore('songs');
+        }
+
         if (!db.objectStoreNames.contains(this.playlistStore)) {
           db.createObjectStore(this.playlistStore, { keyPath: 'id' });
         }
@@ -40,37 +34,37 @@ class VaultDb {
     });
   }
 
-  // --- SONGS ---
+  // --- MEDIA ---
 
-  async saveSong(song: VaultSong): Promise<void> {
+  async saveMedia(media: VaultMedia): Promise<void> {
     const db = await this.getDb();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.songStore, 'readwrite');
-      const store = transaction.objectStore(this.songStore);
-      const request = store.put(song);
-      request.onerror = () => reject('Failed to save song');
+      const transaction = db.transaction(this.mediaStore, 'readwrite');
+      const store = transaction.objectStore(this.mediaStore);
+      const request = store.put(media);
+      request.onerror = () => reject('Failed to save media');
       request.onsuccess = () => resolve();
     });
   }
 
-  async getAllSongs(): Promise<VaultSong[]> {
+  async getAllMedia(): Promise<VaultMedia[]> {
     const db = await this.getDb();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.songStore, 'readonly');
-      const store = transaction.objectStore(this.songStore);
+      const transaction = db.transaction(this.mediaStore, 'readonly');
+      const store = transaction.objectStore(this.mediaStore);
       const request = store.getAll();
-      request.onerror = () => reject('Failed to fetch songs');
+      request.onerror = () => reject('Failed to fetch media');
       request.onsuccess = () => resolve(request.result);
     });
   }
 
-  async deleteSong(id: string): Promise<void> {
+  async deleteMedia(id: string): Promise<void> {
     const db = await this.getDb();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.songStore, 'readwrite');
-      const store = transaction.objectStore(this.songStore);
+      const transaction = db.transaction(this.mediaStore, 'readwrite');
+      const store = transaction.objectStore(this.mediaStore);
       const request = store.delete(id);
-      request.onerror = () => reject('Failed to delete song');
+      request.onerror = () => reject('Failed to delete media');
       request.onsuccess = () => resolve();
     });
   }

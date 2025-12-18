@@ -53,10 +53,9 @@ export const DEFAULT_SPEAKERS = SPEAKER_LAYOUTS['Atmos 7.1.4'];
 
 export const AUDIO_PRESETS = [
   'Pure Direct',
+  'Action Movie',
   'IMAX Enhanced',
-  'THX Reference',
   'Dolby Atmos Music',
   'Concert Auditorium',
-  'Small Studio',
   'Vintage Cinema'
 ];

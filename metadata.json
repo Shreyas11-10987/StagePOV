@@ -1,6 +1,6 @@
 {
-  "name": "StagePOV: Music Spatial Master",
-  "description": "A high-fidelity spatial audio workstation optimized for music playback, binaural mastering, and 3D soundstage visualization.",
+  "name": "StagePOV: Pro Cinema Audio Suite",
+  "description": "Professional 16-bit 48kHz cinema audio workstation featuring Theater Mode, spatial mastering, and persistent cloud-based song storage.",
   "requestFramePermissions": [
     "microphone"
   ]

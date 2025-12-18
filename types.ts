@@ -16,6 +16,9 @@ export interface AudioSettings {
   drc: number; // Dynamic Range Compression
   lfeCrossover: number;
   centerSpread: number;
+  // Advanced Calibration
+  speakerDelay: number; // in milliseconds
+  phaseAlignment: number; // in milliseconds (sub-sample fine tuning)
   // Quality Settings
   bitDepth: 16 | 24 | 32;
   sampleRate: number;

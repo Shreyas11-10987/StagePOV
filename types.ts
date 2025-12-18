@@ -5,20 +5,23 @@ export interface AudioSettings {
   treble: number;
   vocalClarity: number;
   spatiality: number;
-  reverbLevel: number;
+  reverbLevel: number; // New separate option for Reverb/Ambience
   isAtmosEnabled: boolean;
-  isHdAudioEnabled: boolean;
+  isHdAudioEnabled: boolean; // New HD Audio toggle
   selectedPreset: string;
   isTheaterMode: boolean;
   isHeadTrackingEnabled: boolean;
   isDolbyVisionEnabled: boolean;
+  // New Surround Settings
   surroundLevel: number;
   heightLevel: number;
-  drc: number;
+  drc: number; // Dynamic Range Compression
   lfeCrossover: number;
   centerSpread: number;
-  speakerDelay: number;
-  phaseAlignment: number;
+  // Advanced Calibration
+  speakerDelay: number; // in milliseconds
+  phaseAlignment: number; // in milliseconds (sub-sample fine tuning)
+  // Quality Settings
   bitDepth: 16 | 24 | 32;
   sampleRate: number;
 }
@@ -44,19 +47,9 @@ export interface EQBand {
   gain: number;
 }
 
-export interface VaultMedia {
-  id: string;
-  name: string;
-  blob: Blob;
-  size: number;
-  type: string;
-  dateAdded: number;
-  duration?: number;
-}
-
 export interface VaultPlaylist {
   id: string;
   name: string;
-  mediaIds: string[];
+  songIds: string[];
   dateCreated: number;
 }

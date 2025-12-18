@@ -5,6 +5,7 @@ export interface AudioSettings {
   treble: number;
   vocalClarity: number;
   spatiality: number;
+  reverbLevel: number; // New separate option for Reverb/Ambience
   isAtmosEnabled: boolean;
   selectedPreset: string;
   isTheaterMode: boolean;

@@ -30,6 +30,7 @@ const App: React.FC = () => {
     treble: 2, // Slight air boost for clarity
     vocalClarity: 5, // Neutral presence
     spatiality: 0.8,
+    reverbLevel: 0, // Default to 0 for Clean/Dry Music playback
     isAtmosEnabled: true, selectedPreset: 'Pure Direct', isTheaterMode: false,
     isHeadTrackingEnabled: false, isDolbyVisionEnabled: false, surroundLevel: 0.7,
     heightLevel: 0.5, drc: 0.1, lfeCrossover: 80, centerSpread: 0.4,
@@ -90,6 +91,7 @@ const App: React.FC = () => {
     audioEngine.setBass(settings.bass);
     audioEngine.setTreble(settings.treble);
     audioEngine.setVocalClarity(settings.vocalClarity);
+    audioEngine.setReverb(settings.reverbLevel); // Manual Reverb Control
     audioEngine.setTheaterMode(settings.isTheaterMode);
     audioEngine.setDRC(settings.drc);
     audioEngine.setHeightLevel(settings.heightLevel);
@@ -498,6 +500,7 @@ const App: React.FC = () => {
                  <ControlGroup label="Master Level" value={settings.volume} min={0} max={3} step={0.01} onChange={v => setSettings(p => ({...p, volume: v}))} suffix="%" displayMult={100} />
                  <ControlGroup label="LFE / Bass" value={settings.bass} min={-10} max={15} step={1} onChange={v => setSettings(p => ({...p, bass: v}))} suffix="db" />
                  <ControlGroup label="Verticality" value={settings.heightLevel} min={0} max={1} step={0.1} onChange={v => setSettings(p => ({...p, heightLevel: v}))} suffix="%" displayMult={100} />
+                 <ControlGroup label="Ambience / Reverb" value={settings.reverbLevel} min={0} max={1} step={0.05} onChange={v => setSettings(p => ({...p, reverbLevel: v}))} suffix="" displayMult={100} />
                  
                  <div className="space-y-8 pt-8 border-t border-white/5">
                    <h4 className="text-[10px] font-black uppercase tracking-widest text-blue-400">Advanced Calibration</h4>

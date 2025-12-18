@@ -113,6 +113,7 @@ export class AudioEngine {
     
     // Boost dry gain slightly to overcome filter insertion loss
     this.dryGain.gain.value = 1.2; 
+    // Default Reverb to 0 (OFF) for clean music playback
     this.wetGain.gain.value = 0.0; 
 
     this.panner = this.context.createPanner();
@@ -191,6 +192,12 @@ export class AudioEngine {
     }
   }
 
+  setReverb(value: number) {
+    if (this.wetGain && this.context) {
+       this.wetGain.gain.setTargetAtTime(value, this.context.currentTime, 0.1);
+    }
+  }
+
   setDRC(value: number) {
     // In this new topology, DRC controls the Limiter Threshold. 
     // Higher DRC = Lower Threshold = More "Squashed" / Safer
@@ -206,12 +213,12 @@ export class AudioEngine {
     
     if (enabled) {
       this.xCurveFilter?.gain.setTargetAtTime(-1.5, time, 0.5); 
-      this.wetGain?.gain.setTargetAtTime(0.12, time, 0.5); 
+      // Removed automatic wetGain manipulation to allow manual control
       this.bassFilter?.gain.setTargetAtTime(4, time, 0.5); 
       this.midFilter?.gain.setTargetAtTime(3, time, 0.5); 
     } else {
       this.xCurveFilter?.gain.setTargetAtTime(0, time, 0.5);
-      this.wetGain?.gain.setTargetAtTime(0, time, 0.5);
+      // Removed automatic wetGain manipulation
       this.bassFilter?.gain.setTargetAtTime(0, time, 0.5);
       this.midFilter?.gain.setTargetAtTime(0, time, 0.5);
     }
@@ -221,7 +228,7 @@ export class AudioEngine {
     if (!this.context) return;
     const time = this.context.currentTime;
     
-    this.wetGain?.gain.setTargetAtTime(0, time, 0.2);
+    // Removed wetGain reset here
     this.bassFilter?.gain.setTargetAtTime(0, time, 0.2);
     this.trebleFilter?.gain.setTargetAtTime(0, time, 0.2);
     this.midFilter?.gain.setTargetAtTime(0, time, 0.2);
@@ -231,22 +238,19 @@ export class AudioEngine {
         this.bassFilter?.gain.setTargetAtTime(8, time, 0.2);
         this.midFilter?.gain.setTargetAtTime(3, time, 0.2);
         this.trebleFilter?.gain.setTargetAtTime(2, time, 0.2);
-        this.wetGain?.gain.setTargetAtTime(0.15, time, 0.2);
+        // Reverb changes removed
         this.reverbNode!.buffer = this.createImpulseResponse(2.5, 1.5);
         break;
       case 'THX Reference':
         this.midFilter?.gain.setTargetAtTime(1, time, 0.2);
-        this.wetGain?.gain.setTargetAtTime(0.02, time, 0.2);
         break;
       case 'Concert Auditorium':
-        this.wetGain?.gain.setTargetAtTime(0.35, time, 0.2);
         this.trebleFilter?.gain.setTargetAtTime(1, time, 0.2);
         this.reverbNode!.buffer = this.createImpulseResponse(3.5, 2.0);
         break;
       case 'Vintage Cinema':
         this.midFilter?.gain.setTargetAtTime(5, time, 0.2);
         this.xCurveFilter?.gain.setTargetAtTime(-4, time, 0.2);
-        this.wetGain?.gain.setTargetAtTime(0.2, time, 0.2);
         break;
       case 'Pure Direct':
         // Flat response

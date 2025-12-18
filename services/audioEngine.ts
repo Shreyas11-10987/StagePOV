@@ -1,4 +1,6 @@
 
+import { AudioSettings } from '../types';
+
 export class AudioEngine {
   private context: AudioContext | null = null;
   private source: MediaElementAudioSourceNode | null = null;
@@ -9,7 +11,7 @@ export class AudioEngine {
   
   private bassFilter: BiquadFilterNode | null = null;
   private trebleFilter: BiquadFilterNode | null = null;
-  private midFilter: BiquadFilterNode | null = null; // Vocal presence
+  private midFilter: BiquadFilterNode | null = null; 
   private xCurveFilter: BiquadFilterNode | null = null; 
   private heightFilter: BiquadFilterNode | null = null;
   private lfeCrossover: BiquadFilterNode | null = null;
@@ -26,17 +28,11 @@ export class AudioEngine {
   private wetGain: GainNode | null = null;
 
   async init(element: HTMLMediaElement, sampleRate: number = 48000, bitDepth: number = 16) {
-    // Cleanup previous context and source
     if (this.context) {
       if (this.source) {
-        try {
-          this.source.disconnect();
-        } catch (e) {
-          console.warn("Error disconnecting old source:", e);
-        }
+        try { this.source.disconnect(); } catch (e) { console.warn(e); }
         this.source = null;
       }
-
       if (this.context.state !== 'closed') {
         await this.context.close();
       }
@@ -52,104 +48,93 @@ export class AudioEngine {
       this.source = this.context.createMediaElementSource(element);
     } catch (err) {
       console.error("Failed to create MediaElementSource:", err);
-      // If we fail here, it likely means the element is still tied to another context. 
-      // The App.tsx key-remount fix should prevent this, but we catch it just in case.
       return;
     }
 
-    this.analyser = this.context.createAnalyser();
+    this.setupGraph(this.context, this.source, this.context.destination);
+  }
+
+  // Abstracted graph setup to support both Realtime and Offline contexts
+  private setupGraph(ctx: BaseAudioContext, source: AudioNode, destination: AudioNode) {
+    this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 2048;
 
-    this.gainNode = this.context.createGain();
-    // Default to a healthy boost
+    this.gainNode = ctx.createGain();
     this.gainNode.gain.value = 1.0; 
 
-    this.compressor = this.context.createDynamicsCompressor();
-    // LIMITER CONFIGURATION
-    // Instead of compressing early, we use this as a safety ceiling (Brickwall Limiter).
-    // This allows the volume to be pushed very high (via gainNode) without clipping.
-    this.compressor.threshold.value = -0.5; // Only engage when hitting 99% volume
-    this.compressor.knee.value = 0; // Hard knee for strict limiting
-    this.compressor.ratio.value = 20; // Infinity:1 ratio (effectively)
-    this.compressor.attack.value = 0.001; // Instant catch
-    this.compressor.release.value = 0.1; // Fast release to preserve punch
+    this.compressor = ctx.createDynamicsCompressor();
+    this.compressor.threshold.value = -0.5;
+    this.compressor.knee.value = 0;
+    this.compressor.ratio.value = 20;
+    this.compressor.attack.value = 0.001;
+    this.compressor.release.value = 0.1;
 
-    this.delayNode = this.context.createDelay(1.0);
+    this.delayNode = ctx.createDelay(1.0);
     this.delayNode.delayTime.value = 0;
 
     // EQ STACK
-    // Vocal Presence: Tuned to 3.2kHz which is the 'Intelligibility' sweet spot
-    this.midFilter = this.context.createBiquadFilter();
+    this.midFilter = ctx.createBiquadFilter();
     this.midFilter.type = 'peaking';
     this.midFilter.frequency.value = 3200; 
     this.midFilter.Q.value = 0.8;
-    this.midFilter.gain.value = 0; // Default flat
+    this.midFilter.gain.value = 0; 
 
-    this.bassFilter = this.context.createBiquadFilter();
+    this.bassFilter = ctx.createBiquadFilter();
     this.bassFilter.type = 'lowshelf';
-    this.bassFilter.frequency.value = 120; // Tightened low end
+    this.bassFilter.frequency.value = 120; 
 
-    // Treble: Tuned to 10kHz for "Air" and sparkle, removing the veil/muffle
-    this.trebleFilter = this.context.createBiquadFilter();
+    this.trebleFilter = ctx.createBiquadFilter();
     this.trebleFilter.type = 'highshelf';
     this.trebleFilter.frequency.value = 10000;
 
-    // Standard Cinema roll-off (Only active in theater mode)
-    this.xCurveFilter = this.context.createBiquadFilter();
+    this.xCurveFilter = ctx.createBiquadFilter();
     this.xCurveFilter.type = 'highshelf';
     this.xCurveFilter.frequency.value = 8000;
     this.xCurveFilter.gain.value = 0;
 
-    this.heightFilter = this.context.createBiquadFilter();
+    this.heightFilter = ctx.createBiquadFilter();
     this.heightFilter.type = 'peaking';
-    this.heightFilter.frequency.value = 12000; // Higher for verticality perception
+    this.heightFilter.frequency.value = 12000; 
 
-    this.lfeCrossover = this.context.createBiquadFilter();
+    this.lfeCrossover = ctx.createBiquadFilter();
     this.lfeCrossover.type = 'lowshelf';
     this.lfeCrossover.frequency.value = 80;
     this.lfeCrossover.gain.value = 0;
 
-    // HD Audio Filters - The "Smile" Curve + Clarity
-    this.hdLowFilter = this.context.createBiquadFilter();
+    this.hdLowFilter = ctx.createBiquadFilter();
     this.hdLowFilter.type = 'lowshelf';
-    this.hdLowFilter.frequency.value = 60; // Deep Sub
+    this.hdLowFilter.frequency.value = 60;
     this.hdLowFilter.gain.value = 0;
 
-    this.hdMidDip = this.context.createBiquadFilter();
+    this.hdMidDip = ctx.createBiquadFilter();
     this.hdMidDip.type = 'peaking';
-    this.hdMidDip.frequency.value = 500; // Boxy frequency
+    this.hdMidDip.frequency.value = 500;
     this.hdMidDip.gain.value = 0;
     this.hdMidDip.Q.value = 1.0;
 
-    this.hdHighFilter = this.context.createBiquadFilter();
+    this.hdHighFilter = ctx.createBiquadFilter();
     this.hdHighFilter.type = 'highshelf';
-    this.hdHighFilter.frequency.value = 12000; // Air / Sparkle
+    this.hdHighFilter.frequency.value = 12000; 
     this.hdHighFilter.gain.value = 0;
 
-    // REVERB - Clearer Impulse Response
-    this.reverbNode = this.context.createConvolver();
-    this.reverbNode.buffer = this.createImpulseResponse(1.2, 3.0); // Shorter, brighter reverb
+    this.reverbNode = ctx.createConvolver();
+    // Default IR
+    this.reverbNode.buffer = this.createImpulseResponse(ctx, 1.2, 3.0);
     
-    this.dryGain = this.context.createGain();
-    this.wetGain = this.context.createGain();
-    
-    // Boost dry gain slightly to overcome filter insertion loss
+    this.dryGain = ctx.createGain();
+    this.wetGain = ctx.createGain();
     this.dryGain.gain.value = 1.2; 
-    // Default Reverb to 0 (OFF) for clean music playback
     this.wetGain.gain.value = 0.0; 
 
-    this.panner = this.context.createPanner();
+    this.panner = ctx.createPanner();
     this.panner.panningModel = 'HRTF';
     this.panner.distanceModel = 'inverse';
-    // Centralized Sweet Spot Tuning
-    this.panner.refDistance = 3; // Larger sweet spot before attenuation
+    this.panner.refDistance = 3;
     this.panner.maxDistance = 10000;
-    this.panner.rolloffFactor = 0.5; // Gentler volume drop-off
+    this.panner.rolloffFactor = 0.5;
 
-    // UPDATED SIGNAL PATH: Maximizer Topology
-    // Source -> Standard EQ -> HD EQ -> Split/Sum -> Panner -> Gain -> Compressor -> Out
-    
-    this.source
+    // Connect Nodes
+    source
       .connect(this.midFilter)
       .connect(this.bassFilter)
       .connect(this.trebleFilter)
@@ -160,34 +145,182 @@ export class AudioEngine {
       .connect(this.hdMidDip)
       .connect(this.hdHighFilter);
 
-    // Split point from last filter
     this.hdHighFilter.connect(this.dryGain);
     this.hdHighFilter.connect(this.reverbNode);
     this.reverbNode.connect(this.wetGain);
 
-    // Sum point
     this.dryGain.connect(this.delayNode);
     this.wetGain.connect(this.delayNode);
 
-    // Master bus
     this.delayNode
       .connect(this.panner)
       .connect(this.gainNode) 
-      .connect(this.compressor)
-      .connect(this.analyser)
-      .connect(this.context.destination);
+      .connect(this.compressor);
+
+    // Only connect analyser if realtime context
+    if (ctx instanceof AudioContext) {
+      this.compressor.connect(this.analyser!).connect(destination);
+    } else {
+      this.compressor.connect(destination);
+    }
   }
 
-  private createImpulseResponse(duration: number, decay: number): AudioBuffer {
-    if (!this.context) return new AudioBuffer({length: 1, sampleRate: 48000});
-    const sampleRate = this.context.sampleRate;
+  // --- OFFLINE RENDERING LOGIC ---
+
+  async renderOffline(
+    fileBlob: Blob, 
+    settings: AudioSettings, 
+    onProgress: (p: number) => void
+  ): Promise<Blob> {
+    const arrayBuffer = await fileBlob.arrayBuffer();
+    
+    // We need a temporary context just to decode the audio data
+    const tempCtx = new AudioContext();
+    const audioBuffer = await tempCtx.decodeAudioData(arrayBuffer);
+    tempCtx.close();
+
+    const offlineCtx = new OfflineAudioContext(
+      2, 
+      audioBuffer.length, 
+      settings.sampleRate
+    );
+
+    const source = offlineCtx.createBufferSource();
+    source.buffer = audioBuffer;
+
+    // Set up the exact processing chain on the offline context
+    this.setupGraph(offlineCtx, source, offlineCtx.destination);
+    
+    // Apply Settings to Offline Nodes
+    // Note: We access the nodes we just created in setupGraph. 
+    // Since setupGraph overwrites the class properties, we are manipulating the offline nodes now.
+    // This is safe because renderOffline shouldn't be called during active playback initialization.
+    
+    // Apply EQ
+    this.bassFilter!.gain.value = settings.bass;
+    this.trebleFilter!.gain.value = settings.treble;
+    this.midFilter!.gain.value = (settings.vocalClarity - 5) * 2;
+    this.heightFilter!.gain.value = settings.heightLevel * 6;
+    
+    // Apply Modes
+    if (settings.isTheaterMode) {
+       this.xCurveFilter!.gain.value = -1.5;
+       this.bassFilter!.gain.value = (settings.bass || 0) + 4;
+       this.midFilter!.gain.value = ((settings.vocalClarity - 5) * 2) + 3;
+    }
+    
+    if (settings.isHdAudioEnabled) {
+       this.hdLowFilter!.gain.value = 4;
+       this.hdMidDip!.gain.value = -3;
+       this.hdHighFilter!.gain.value = 6;
+    }
+
+    // Apply Reverb
+    this.wetGain!.gain.value = settings.reverbLevel;
+    
+    // Apply Preset specific IR modifications if needed
+    if (settings.selectedPreset === 'IMAX Enhanced') {
+       this.reverbNode!.buffer = this.createImpulseResponse(offlineCtx, 2.5, 1.5);
+    }
+
+    // Apply Volume
+    this.gainNode!.gain.value = settings.volume;
+
+    // Apply DRC
+    this.compressor!.threshold.value = -0.5 - (settings.drc * 12);
+
+    source.start(0);
+
+    // Render
+    const renderedBuffer = await offlineCtx.startRendering();
+    
+    // Re-init live engine to restore state for playback
+    // (User will need to press play again, which re-inits automatically in App.tsx)
+    
+    // Convert to WAV
+    return this.audioBufferToWav(renderedBuffer, settings.bitDepth);
+  }
+
+  private audioBufferToWav(buffer: AudioBuffer, bitDepth: number): Blob {
+    const numOfChan = buffer.numberOfChannels;
+    const length = buffer.length * numOfChan * (bitDepth / 8);
+    const bufferLength = 44 + length;
+    const arrayBuffer = new ArrayBuffer(bufferLength);
+    const view = new DataView(arrayBuffer);
+    const channels = [];
+    let sample = 0;
+    let offset = 0;
+    let pos = 0;
+
+    // write WAVE header
+    setUint32(0x46464952); // "RIFF"
+    setUint32(bufferLength - 8); // file length - 8
+    setUint32(0x45564157); // "WAVE"
+
+    setUint32(0x20746d66); // "fmt " chunk
+    setUint32(16); // length = 16
+    setUint16(1); // PCM (uncompressed)
+    setUint16(numOfChan);
+    setUint32(buffer.sampleRate);
+    setUint32(buffer.sampleRate * numOfChan * (bitDepth / 8)); // avg. bytes/sec
+    setUint16(numOfChan * (bitDepth / 8)); // block-align
+    setUint16(bitDepth); // 16-bit or 32-bit (handled below)
+
+    setUint32(0x61746164); // "data" - chunk
+    setUint32(length); // chunk length
+
+    // write interleaved data
+    for(let i = 0; i < buffer.numberOfChannels; i++)
+      channels.push(buffer.getChannelData(i));
+
+    pos = 44;
+    
+    // Helper
+    function setUint16(data: number) {
+      view.setUint16(pos, data, true);
+      pos += 2;
+    }
+    function setUint32(data: number) {
+      view.setUint32(pos, data, true);
+      pos += 4;
+    }
+
+    while(pos < bufferLength) {
+      for(let i = 0; i < numOfChan; i++) {
+        sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
+        
+        if (bitDepth === 16) {
+           sample = (sample < 0 ? sample * 0x8000 : sample * 0x7FFF) | 0;
+           view.setInt16(pos, sample, true);
+           pos += 2;
+        } else if (bitDepth === 32) {
+           view.setFloat32(pos, sample, true);
+           pos += 4;
+        } else {
+           // 24-bit
+           sample = (sample < 0 ? sample * 0x800000 : sample * 0x7FFFFF) | 0;
+           view.setUint8(pos, (sample) & 0xFF);
+           pos += 1;
+           view.setUint8(pos, (sample >> 8) & 0xFF);
+           pos += 1;
+           view.setUint8(pos, (sample >> 16) & 0xFF);
+           pos += 1;
+        }
+      }
+      offset++;
+    }
+
+    return new Blob([arrayBuffer], { type: 'audio/wav' });
+  }
+
+  private createImpulseResponse(ctx: BaseAudioContext, duration: number, decay: number): AudioBuffer {
+    const sampleRate = ctx.sampleRate;
     const length = sampleRate * duration;
-    const impulse = this.context.createBuffer(2, length, sampleRate);
+    const impulse = ctx.createBuffer(2, length, sampleRate);
     
     for (let channel = 0; channel < 2; channel++) {
       const channelData = impulse.getChannelData(channel);
       for (let i = 0; i < length; i++) {
-        // High-pass filter the noise slightly to avoid muddy reverb tails
         const noise = (Math.random() * 2 - 1);
         channelData[i] = noise * Math.pow(1 - i / length, decay);
       }
@@ -232,10 +365,9 @@ export class AudioEngine {
     const time = this.context.currentTime;
     
     if (enabled) {
-      // "Hi-Res" Contour: Deep lows, clear highs, removed mud.
-      this.hdLowFilter?.gain.setTargetAtTime(4, time, 0.2); // +4dB Sub
-      this.hdMidDip?.gain.setTargetAtTime(-3, time, 0.2);  // -3dB Boxiness (Clean mids)
-      this.hdHighFilter?.gain.setTargetAtTime(6, time, 0.2); // +6dB Air/Sparkle
+      this.hdLowFilter?.gain.setTargetAtTime(4, time, 0.2); 
+      this.hdMidDip?.gain.setTargetAtTime(-3, time, 0.2); 
+      this.hdHighFilter?.gain.setTargetAtTime(6, time, 0.2); 
     } else {
       this.hdLowFilter?.gain.setTargetAtTime(0, time, 0.2);
       this.hdMidDip?.gain.setTargetAtTime(0, time, 0.2);
@@ -271,20 +403,18 @@ export class AudioEngine {
         this.bassFilter?.gain.setTargetAtTime(8, time, 0.2);
         this.midFilter?.gain.setTargetAtTime(3, time, 0.2);
         this.trebleFilter?.gain.setTargetAtTime(2, time, 0.2);
-        this.reverbNode!.buffer = this.createImpulseResponse(2.5, 1.5);
+        this.reverbNode!.buffer = this.createImpulseResponse(this.context, 2.5, 1.5);
         break;
       case 'THX Reference':
         this.midFilter?.gain.setTargetAtTime(1, time, 0.2);
         break;
       case 'Concert Auditorium':
         this.trebleFilter?.gain.setTargetAtTime(1, time, 0.2);
-        this.reverbNode!.buffer = this.createImpulseResponse(3.5, 2.0);
+        this.reverbNode!.buffer = this.createImpulseResponse(this.context, 3.5, 2.0);
         break;
       case 'Vintage Cinema':
         this.midFilter?.gain.setTargetAtTime(5, time, 0.2);
         this.xCurveFilter?.gain.setTargetAtTime(-4, time, 0.2);
-        break;
-      case 'Pure Direct':
         break;
     }
   }

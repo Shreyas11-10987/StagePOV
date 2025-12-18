@@ -32,7 +32,7 @@ const App: React.FC = () => {
     spatiality: 0.8,
     reverbLevel: 0, 
     isAtmosEnabled: true, selectedPreset: 'Pure Direct', isTheaterMode: false,
-    isHdAudioEnabled: false, // Default HD Audio OFF
+    isHdAudioEnabled: false, 
     isHeadTrackingEnabled: false, isDolbyVisionEnabled: false, surroundLevel: 0.7,
     heightLevel: 0.5, drc: 0.1, lfeCrossover: 80, centerSpread: 0.4,
     speakerDelay: 0,
@@ -46,7 +46,7 @@ const App: React.FC = () => {
   const [activeView, setActiveView] = useState<'deck' | 'stage' | 'vault'>('deck');
   const [isReady, setIsReady] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [mediaData, setMediaData] = useState<{ name: string, url: string, id?: string } | null>(null);
+  const [mediaData, setMediaData] = useState<{ name: string, url: string, id?: string, blob?: Blob } | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -55,6 +55,7 @@ const App: React.FC = () => {
   const [vaultSongs, setVaultSongs] = useState<VaultSong[]>([]);
   const [playlists, setPlaylists] = useState<VaultPlaylist[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   
   // Sorting & Filtering
   const [searchQuery, setSearchQuery] = useState('');
@@ -80,14 +81,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (mediaRef.current && isReady) {
       const resumeTime = restoreTimeRef.current;
-
       audioEngine.init(mediaRef.current, settings.sampleRate, settings.bitDepth).then(() => {
         updateEngine();
-        
         if (mediaRef.current) {
-          if (resumeTime > 0.5) { 
-             mediaRef.current.currentTime = resumeTime;
-          }
+          if (resumeTime > 0.5) mediaRef.current.currentTime = resumeTime;
           if (isPlaying) mediaRef.current.play();
         }
       });
@@ -109,23 +106,20 @@ const App: React.FC = () => {
     audioEngine.setVocalClarity(settings.vocalClarity);
     audioEngine.setReverb(settings.reverbLevel);
     audioEngine.setTheaterMode(settings.isTheaterMode);
-    audioEngine.setHdMode(settings.isHdAudioEnabled); // Update HD Mode
+    audioEngine.setHdMode(settings.isHdAudioEnabled);
     audioEngine.setDRC(settings.drc);
     audioEngine.setHeightLevel(settings.heightLevel);
     audioEngine.setLfeCrossover(settings.lfeCrossover);
     audioEngine.setSpeakerCalibration(settings.speakerDelay, settings.phaseAlignment);
     audioEngine.applyPreset(settings.selectedPreset);
     
-    // CENTROID CALCULATION
     const activeSpeakers = speakers.filter(s => s.isActive);
     if (activeSpeakers.length > 0) {
       let sumY = 0, sumZ = 0;
       activeSpeakers.forEach(s => {
-        // sumX excluded to enforce center anchor
         sumY += s.y;
         sumZ += s.z;
       });
-      // Force X to 0 to keep sound center-anchored regardless of speaker distribution
       const cx = 0; 
       const cy = sumY / activeSpeakers.length;
       const cz = sumZ / activeSpeakers.length;
@@ -159,17 +153,15 @@ const App: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-
     if (files.length > 1) {
       await handleVaultUpload(e);
       alert(`${files.length} masters secured in Vault.`);
       return;
     }
-
     const file = files[0];
     if (mediaData?.url && !mediaData.id) URL.revokeObjectURL(mediaData.url);
     const url = URL.createObjectURL(file);
-    setMediaData({ name: file.name.replace(/\.[^/.]+$/, ""), url });
+    setMediaData({ name: file.name.replace(/\.[^/.]+$/, ""), url, blob: file });
     setIsPlaying(false);
     setPlaybackQueue([]); 
   };
@@ -177,7 +169,6 @@ const App: React.FC = () => {
   const handleVaultUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    
     setIsSaving(true);
     try {
       for (let i = 0; i < files.length; i++) {
@@ -193,42 +184,77 @@ const App: React.FC = () => {
         });
       }
       await refreshVault();
-    } catch (err) {
-      console.error("Bulk Save Error:", err);
-    } finally {
-      setIsSaving(false);
-      if (e.target) e.target.value = '';
-    }
+    } catch (err) { console.error("Bulk Save Error:", err); } 
+    finally { setIsSaving(false); if (e.target) e.target.value = ''; }
   };
 
   const saveToVault = async () => {
     if (!mediaData || isSaving) return;
     setIsSaving(true);
     try {
-      const response = await fetch(mediaData.url);
-      const blob = await response.blob();
+      let blob = mediaData.blob;
+      if (!blob) {
+         const response = await fetch(mediaData.url);
+         blob = await response.blob();
+      }
       const songId = `song_${Date.now()}`;
       await vaultDb.saveSong({
         id: songId,
         name: mediaData.name,
-        blob: blob,
-        size: blob.size,
-        type: blob.type,
+        blob: blob!,
+        size: blob!.size,
+        type: blob!.type,
         dateAdded: Date.now()
       });
-      setMediaData({ ...mediaData, id: songId });
+      setMediaData({ ...mediaData, id: songId, blob });
       await refreshVault();
-    } catch (err) {
-      console.error("Vault Save Error:", err);
+    } catch (err) { console.error("Vault Save Error:", err); } 
+    finally { setIsSaving(false); }
+  };
+
+  const exportSpatialAudio = async () => {
+    if (!mediaData || isExporting) return;
+    setIsExporting(true);
+    
+    // Pause playback during export to prevent glitching
+    if (isPlaying && mediaRef.current) mediaRef.current.pause();
+
+    try {
+       // Get Blob
+       let blob = mediaData.blob;
+       if (!blob) {
+          const r = await fetch(mediaData.url);
+          blob = await r.blob();
+       }
+
+       const renderedWav = await audioEngine.renderOffline(blob!, settings, (p) => {
+         // Progress callback could be added here
+       });
+
+       const url = URL.createObjectURL(renderedWav);
+       const a = document.createElement('a');
+       a.href = url;
+       a.download = `${mediaData.name} [StagePOV Immersive Master].wav`;
+       document.body.appendChild(a);
+       a.click();
+       document.body.removeChild(a);
+       URL.revokeObjectURL(url);
+       
+       alert("Export Complete! Your immersive master has been downloaded.");
+
+       // Resume playback if it was playing? Better to leave it paused so user can re-engage
+    } catch (e) {
+       console.error("Export failed", e);
+       alert("Export failed. Please ensure the file format is supported.");
     } finally {
-      setIsSaving(false);
+       setIsExporting(false);
     }
   };
 
   const playSongFromVault = (song: VaultSong, queue: VaultSong[] = []) => {
     if (mediaData?.url && !mediaData.id) URL.revokeObjectURL(mediaData.url);
     const url = URL.createObjectURL(song.blob);
-    setMediaData({ name: song.name, url, id: song.id });
+    setMediaData({ name: song.name, url, id: song.id, blob: song.blob });
     
     if (queue.length > 0) {
       const index = queue.findIndex(s => s.id === song.id);
@@ -240,7 +266,6 @@ const App: React.FC = () => {
     } else {
       setPlaybackQueue([]);
     }
-
     setActiveView('deck');
     setIsPlaying(true);
   };
@@ -294,14 +319,7 @@ const App: React.FC = () => {
     if (selectedSongIds.size === 0) return;
     const name = window.prompt("Enter Playlist Name:");
     if (!name) return;
-
-    await vaultDb.savePlaylist({
-      id: `pl_${Date.now()}`,
-      name,
-      songIds: Array.from(selectedSongIds),
-      dateCreated: Date.now()
-    });
-
+    await vaultDb.savePlaylist({ id: `pl_${Date.now()}`, name, songIds: Array.from(selectedSongIds), dateCreated: Date.now() });
     setIsSelectionMode(false);
     setSelectedSongIds(new Set());
     await refreshVault();
@@ -309,7 +327,6 @@ const App: React.FC = () => {
 
   const filteredAndSortedSongs = useMemo(() => {
     let result = [...vaultSongs];
-
     if (selectedPlaylistId) {
       const pl = playlists.find(p => p.id === selectedPlaylistId);
       if (pl) {
@@ -317,26 +334,20 @@ const App: React.FC = () => {
         result = result.filter(s => idSet.has(s.id));
       }
     }
-
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       result = result.filter(s => s.name.toLowerCase().includes(q));
     }
-
     result.sort((a, b) => {
       if (sortBy === 'name') return a.name.localeCompare(b.name);
       if (sortBy === 'size') return b.size - a.size;
       return b.dateAdded - a.dateAdded; 
     });
-
     return result;
   }, [vaultSongs, playlists, selectedPlaylistId, searchQuery, sortBy]);
 
   const NavItem = ({ id, label, icon }: { id: typeof activeView, label: string, icon: React.ReactNode }) => (
-    <button 
-      onClick={() => setActiveView(id)}
-      className={`flex flex-col md:flex-row items-center gap-3 md:gap-4 px-6 py-4 rounded-xl transition-all duration-300 ${activeView === id ? 'text-white bg-blue-600/20 border border-blue-500/30' : 'text-slate-500 hover:bg-white/5'}`}
-    >
+    <button onClick={() => setActiveView(id)} className={`flex flex-col md:flex-row items-center gap-3 md:gap-4 px-6 py-4 rounded-xl transition-all duration-300 ${activeView === id ? 'text-white bg-blue-600/20 border border-blue-500/30' : 'text-slate-500 hover:bg-white/5'}`}>
       {icon}
       <span className="text-[10px] font-black uppercase tracking-[0.2em]">{label}</span>
     </button>
@@ -359,7 +370,6 @@ const App: React.FC = () => {
 
   return (
     <div className={`h-screen w-full flex flex-col md:flex-row bg-[#020205] text-white overflow-hidden font-inter transition-colors duration-1000 ${settings.isTheaterMode ? 'bg-black' : ''}`}>
-      
       <audio 
         key={`${settings.sampleRate}-${settings.bitDepth}`}
         ref={mediaRef} 
@@ -386,7 +396,6 @@ const App: React.FC = () => {
             <NavItem id="vault" label="THE VAULT" icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>} />
           </nav>
         </div>
-        
         <button onClick={() => setIsSettingsOpen(true)} className="hidden md:flex items-center justify-between w-full px-6 py-5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/5 transition-all group">
            <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">DSP MASTER</span>
            <svg className="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
@@ -398,12 +407,7 @@ const App: React.FC = () => {
           
           {settings.isTheaterMode && (
              <div className="absolute top-10 right-10 z-[100] animate-in fade-in">
-               <button 
-                 onClick={() => setSettings(s => ({ ...s, isTheaterMode: false }))}
-                 className="px-6 py-3 rounded-full bg-white/10 border border-white/10 text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/20 transition-all"
-               >
-                 Exit Theater
-               </button>
+               <button onClick={() => setSettings(s => ({ ...s, isTheaterMode: false }))} className="px-6 py-3 rounded-full bg-white/10 border border-white/10 text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/20 transition-all">Exit Theater</button>
              </div>
           )}
 
@@ -432,22 +436,32 @@ const App: React.FC = () => {
                           {settings.bitDepth}-BIT MASTER
                         </span>
                         {!mediaData.id && (
-                          <button 
-                            onClick={saveToVault}
-                            disabled={isSaving}
-                            className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-white transition-colors"
-                          >
+                          <button onClick={saveToVault} disabled={isSaving} className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-white transition-colors">
                             <svg className={`w-4 h-4 ${isSaving ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
                             {isSaving ? 'STAGING...' : 'SAVE TO CLOUD VAULT'}
                           </button>
                         )}
-                        {mediaData.id && (
-                          <span className="text-[9px] font-black uppercase tracking-widest text-green-500/70 flex items-center gap-1">
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"/></svg>
-                            SECURED IN VAULT
-                          </span>
-                        )}
+                        {mediaData.id && <span className="text-[9px] font-black uppercase tracking-widest text-green-500/70 flex items-center gap-1"><svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"/></svg>SECURED IN VAULT</span>}
                       </div>
+                      
+                      {/* EXPORT BUTTON */}
+                      <button 
+                        onClick={exportSpatialAudio}
+                        disabled={isExporting}
+                        className="px-8 py-3 rounded-full bg-blue-600/20 text-blue-400 border border-blue-500/40 font-black text-[10px] uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all shadow-lg flex items-center gap-3 mx-auto"
+                      >
+                         {isExporting ? (
+                           <>
+                             <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                             RENDERING OFFLINE...
+                           </>
+                         ) : (
+                           <>
+                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                             EXPORT IMMERSIVE MASTER
+                           </>
+                         )}
+                      </button>
                     </div>
                   </div>
                 )}
@@ -705,7 +719,8 @@ const App: React.FC = () => {
 
         </div>
       </main>
-
+      
+      {/* Settings Panel (Unchanged) */}
       <div className={`fixed inset-0 z-[200] transition-all duration-500 ${isSettingsOpen ? 'visible' : 'invisible'}`}>
         <div className={`absolute inset-0 bg-black/95 transition-opacity duration-500 ${isSettingsOpen ? 'opacity-100' : 'opacity-0'}`} onClick={() => setIsSettingsOpen(false)}></div>
         <div className={`absolute top-0 right-0 h-full w-full md:w-[480px] bg-black border-l border-white/10 p-12 shadow-3xl transition-transform duration-500 ${isSettingsOpen ? 'translate-x-0' : 'translate-x-full'} flex flex-col`}>
@@ -760,26 +775,24 @@ const App: React.FC = () => {
                  </div>
                  
                  <h3 className="text-[11px] font-black text-blue-500 uppercase tracking-[0.4em]">Processing Path</h3>
-                 <ControlGroup label="Master Level" value={settings.volume} min={0} max={3} step={0.01} onChange={v => setSettings(p => ({...p, volume: v}))} suffix="%" displayMult={100} />
-                 <ControlGroup label="LFE / Bass" value={settings.bass} min={-10} max={15} step={1} onChange={v => setSettings(p => ({...p, bass: v}))} suffix="db" />
-                 <ControlGroup label="Verticality" value={settings.heightLevel} min={0} max={1} step={0.1} onChange={v => setSettings(p => ({...p, heightLevel: v}))} suffix="%" displayMult={100} />
-                 <ControlGroup label="Ambience / Reverb" value={settings.reverbLevel} min={0} max={1} step={0.05} onChange={v => setSettings(p => ({...p, reverbLevel: v}))} suffix="" displayMult={100} />
+                 <ControlGroup label="Master Level" value={settings.volume} min={0} max={3} step={0.01} onChange={(v: any) => setSettings(p => ({...p, volume: v}))} suffix="%" displayMult={100} />
+                 <ControlGroup label="LFE / Bass" value={settings.bass} min={-10} max={15} step={1} onChange={(v: any) => setSettings(p => ({...p, bass: v}))} suffix="db" />
+                 <ControlGroup label="Verticality" value={settings.heightLevel} min={0} max={1} step={0.1} onChange={(v: any) => setSettings(p => ({...p, heightLevel: v}))} suffix="%" displayMult={100} />
+                 <ControlGroup label="Ambience / Reverb" value={settings.reverbLevel} min={0} max={1} step={0.05} onChange={(v: any) => setSettings(p => ({...p, reverbLevel: v}))} suffix="" displayMult={100} />
                  
                  <div className="space-y-8 pt-8 border-t border-white/5">
                    <h4 className="text-[10px] font-black uppercase tracking-widest text-blue-400">Advanced Calibration</h4>
-                   <ControlGroup label="Speaker Delay" value={settings.speakerDelay} min={0} max={100} step={1} onChange={v => setSettings(p => ({...p, speakerDelay: v}))} suffix="ms" />
-                   <ControlGroup label="Phase Alignment" value={settings.phaseAlignment} min={-5} max={5} step={0.1} onChange={v => setSettings(p => ({...p, phaseAlignment: v}))} suffix="ms" />
-                   <ControlGroup label="LFE Crossover" value={settings.lfeCrossover} min={40} max={250} step={5} onChange={v => setSettings(p => ({...p, lfeCrossover: v}))} suffix="Hz" />
+                   <ControlGroup label="Speaker Delay" value={settings.speakerDelay} min={0} max={100} step={1} onChange={(v: any) => setSettings(p => ({...p, speakerDelay: v}))} suffix="ms" />
+                   <ControlGroup label="Phase Alignment" value={settings.phaseAlignment} min={-5} max={5} step={0.1} onChange={(v: any) => setSettings(p => ({...p, phaseAlignment: v}))} suffix="ms" />
+                   <ControlGroup label="LFE Crossover" value={settings.lfeCrossover} min={40} max={250} step={5} onChange={(v: any) => setSettings(p => ({...p, lfeCrossover: v}))} suffix="Hz" />
                  </div>
 
                  <ToggleSwitch label="Theater Mode" enabled={settings.isTheaterMode} onToggle={() => setSettings(p => ({...p, isTheaterMode: !p.isTheaterMode}))} />
-                 {/* New HD Audio Switch */}
                  <ToggleSwitch label="HD Audio (Hi-Res)" enabled={settings.isHdAudioEnabled} onToggle={() => setSettings(p => ({...p, isHdAudioEnabled: !p.isHdAudioEnabled}))} />
               </section>
            </div>
         </div>
       </div>
-
     </div>
   );
 

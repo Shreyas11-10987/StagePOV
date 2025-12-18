@@ -52,12 +52,27 @@ const App: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   
   const mediaRef = useRef<HTMLAudioElement>(null);
+  const restoreTimeRef = useRef(0);
+
+  // Sync restoreTimeRef with currentTime state so we can recover position after audio element unmount
+  useEffect(() => {
+    restoreTimeRef.current = currentTime;
+  }, [currentTime]);
 
   useEffect(() => {
     if (mediaRef.current && isReady) {
+      const resumeTime = restoreTimeRef.current;
+
       audioEngine.init(mediaRef.current, settings.sampleRate, settings.bitDepth).then(() => {
         updateEngine();
-        if (isPlaying) mediaRef.current?.play();
+        
+        // Restore playback state after engine re-init (which likely caused audio element remount)
+        if (mediaRef.current) {
+          if (resumeTime > 0.5) { // Only restore if significant progress
+             mediaRef.current.currentTime = resumeTime;
+          }
+          if (isPlaying) mediaRef.current.play();
+        }
       });
     }
   }, [isReady, settings.sampleRate, settings.bitDepth]);
@@ -84,7 +99,6 @@ const App: React.FC = () => {
     
     // CENTROID CALCULATION
     // Calculate the acoustic center of all active speakers to position the sound source perfectly balanced.
-    // Previously, a loop here was resetting position rapidly, causing phase issues/non-centered sound.
     const activeSpeakers = speakers.filter(s => s.isActive);
     if (activeSpeakers.length > 0) {
       let sumX = 0, sumY = 0, sumZ = 0;
@@ -98,10 +112,8 @@ const App: React.FC = () => {
       const cz = sumZ / activeSpeakers.length;
       
       // Position the source at the calculated centroid of the speaker array
-      // Default to slightly forward (z=0.5) if centroid is dead center (0,0,0) for better frontal presence
       audioEngine.setSpatialPosition(cx, cy, cz === 0 ? 0.5 : cz);
     } else {
-      // Fallback to center
       audioEngine.setSpatialPosition(0, 0, 1);
     }
   };
@@ -212,6 +224,7 @@ const App: React.FC = () => {
     <div className={`h-screen w-full flex flex-col md:flex-row bg-[#020205] text-white overflow-hidden font-inter transition-colors duration-1000 ${settings.isTheaterMode ? 'bg-black' : ''}`}>
       
       <audio 
+        key={`${settings.sampleRate}-${settings.bitDepth}`}
         ref={mediaRef} 
         src={mediaData?.url || ''}
         onPlay={() => setIsPlaying(true)} 

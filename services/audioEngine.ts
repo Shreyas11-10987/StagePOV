@@ -21,7 +21,17 @@ export class AudioEngine {
   private wetGain: GainNode | null = null;
 
   async init(element: HTMLMediaElement, sampleRate: number = 48000, bitDepth: number = 16) {
+    // Cleanup previous context and source
     if (this.context) {
+      if (this.source) {
+        try {
+          this.source.disconnect();
+        } catch (e) {
+          console.warn("Error disconnecting old source:", e);
+        }
+        this.source = null;
+      }
+
       if (this.context.state !== 'closed') {
         await this.context.close();
       }
@@ -33,7 +43,15 @@ export class AudioEngine {
       sampleRate: sampleRate
     });
 
-    this.source = this.context.createMediaElementSource(element);
+    try {
+      this.source = this.context.createMediaElementSource(element);
+    } catch (err) {
+      console.error("Failed to create MediaElementSource:", err);
+      // If we fail here, it likely means the element is still tied to another context. 
+      // The App.tsx key-remount fix should prevent this, but we catch it just in case.
+      return;
+    }
+
     this.analyser = this.context.createAnalyser();
     this.analyser.fftSize = 2048;
 

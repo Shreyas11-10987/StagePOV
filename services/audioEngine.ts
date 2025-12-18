@@ -12,6 +12,9 @@ export class AudioEngine {
   private theaterBoost: BiquadFilterNode | null = null;
   private vocalFilter: BiquadFilterNode | null = null;
   private absorptionFilter: BiquadFilterNode | null = null;
+  
+  // Height Channel Simulator (Atmos height virtualization)
+  private heightFilter: BiquadFilterNode | null = null;
 
   async init(element: HTMLMediaElement) {
     if (this.context) return;
@@ -27,7 +30,6 @@ export class AudioEngine {
     this.analyser = this.context.createAnalyser();
     this.analyser.fftSize = 256;
 
-    // Dynamic Range Compressor (DRC) for cinema impact
     this.compressor = this.context.createDynamicsCompressor();
     this.compressor.threshold.value = -24;
     this.compressor.knee.value = 30;
@@ -35,10 +37,9 @@ export class AudioEngine {
     this.compressor.attack.value = 0.003;
     this.compressor.release.value = 0.25;
 
-    // Psychoacoustic Vocal Clarity (Center channel simulation)
     this.vocalFilter = this.context.createBiquadFilter();
     this.vocalFilter.type = 'peaking';
-    this.vocalFilter.frequency.value = 3200; // Human vocal clarity band
+    this.vocalFilter.frequency.value = 3200;
     this.vocalFilter.Q.value = 1.2; 
     this.vocalFilter.gain.value = 0;
 
@@ -50,7 +51,14 @@ export class AudioEngine {
     this.trebleFilter.type = 'highshelf';
     this.trebleFilter.frequency.value = 6000;
 
-    // Virtual Theater reflections
+    // Atmos Height Virtualization Filter
+    // Height perception is largely driven by frequency dips/peaks in the 7kHz-12kHz range (HRTF cues)
+    this.heightFilter = this.context.createBiquadFilter();
+    this.heightFilter.type = 'peaking';
+    this.heightFilter.frequency.value = 8000;
+    this.heightFilter.Q.value = 0.7;
+    this.heightFilter.gain.value = 0;
+
     this.theaterBoost = this.context.createBiquadFilter();
     this.theaterBoost.type = 'peaking';
     this.theaterBoost.frequency.value = 50;
@@ -61,7 +69,6 @@ export class AudioEngine {
     this.absorptionFilter.type = 'lowpass';
     this.absorptionFilter.frequency.value = 20000;
 
-    // High-Resolution Panner
     this.panner = this.context.createPanner();
     this.panner.panningModel = 'HRTF';
     this.panner.distanceModel = 'inverse';
@@ -69,10 +76,11 @@ export class AudioEngine {
     this.panner.maxDistance = 10000;
     this.panner.rolloffFactor = 1;
 
-    // Signal Chain: Source -> EQ Stack -> Vocal -> Compressor -> Spatial -> Output
+    // Signal Chain
     this.source
       .connect(this.bassFilter)
       .connect(this.trebleFilter)
+      .connect(this.heightFilter)
       .connect(this.theaterBoost)
       .connect(this.vocalFilter)
       .connect(this.compressor)
@@ -84,32 +92,41 @@ export class AudioEngine {
   }
 
   setVolume(value: number) {
-    if (this.gainNode) this.gainNode.gain.setTargetAtTime(value, this.context!.currentTime, 0.02);
+    if (this.gainNode && this.context) this.gainNode.gain.setTargetAtTime(value, this.context.currentTime, 0.02);
   }
 
   setBass(value: number) {
-    if (this.bassFilter) this.bassFilter.gain.setTargetAtTime(value, this.context!.currentTime, 0.05);
+    if (this.bassFilter && this.context) this.bassFilter.gain.setTargetAtTime(value, this.context.currentTime, 0.05);
   }
 
   setTreble(value: number) {
-    if (this.trebleFilter) this.trebleFilter.gain.setTargetAtTime(value, this.context!.currentTime, 0.05);
+    if (this.trebleFilter && this.context) this.trebleFilter.gain.setTargetAtTime(value, this.context.currentTime, 0.05);
   }
 
   setVocalClarity(value: number) {
-    if (this.vocalFilter) this.vocalFilter.gain.setTargetAtTime(value, this.context!.currentTime, 0.05);
+    if (this.vocalFilter && this.context) this.vocalFilter.gain.setTargetAtTime(value, this.context.currentTime, 0.05);
   }
 
   setDRC(value: number) {
-    if (this.compressor) {
+    if (this.compressor && this.context) {
       const threshold = -10 - (value * 50);
-      this.compressor.threshold.setTargetAtTime(threshold, this.context!.currentTime, 0.05);
+      this.compressor.threshold.setTargetAtTime(threshold, this.context.currentTime, 0.05);
     }
   }
 
   setTheaterMode(enabled: boolean) {
-    if (this.theaterBoost) {
+    if (this.theaterBoost && this.context) {
       const boost = enabled ? 8 : 0;
-      this.theaterBoost.gain.setTargetAtTime(boost, this.context!.currentTime, 0.1);
+      this.theaterBoost.gain.setTargetAtTime(boost, this.context.currentTime, 0.1);
+    }
+  }
+
+  // Atmos specific height intensity adjustment
+  setHeightLevel(value: number) {
+    if (this.heightFilter && this.context) {
+      // Height virtualization via high-freq presence boost
+      const gain = value * 6;
+      this.heightFilter.gain.setTargetAtTime(gain, this.context.currentTime, 0.1);
     }
   }
 
@@ -120,6 +137,12 @@ export class AudioEngine {
       this.panner.positionX.setTargetAtTime(x * multiplier, time, 0.08);
       this.panner.positionY.setTargetAtTime(y * multiplier, time, 0.08);
       this.panner.positionZ.setTargetAtTime(z * multiplier, time, 0.08);
+
+      // Adjust height filter based on Y position (Atmos Object processing)
+      if (this.heightFilter) {
+        const heightCue = y * 4; // Higher objects get more height cue filtering
+        this.heightFilter.gain.setTargetAtTime(heightCue, time, 0.1);
+      }
     }
   }
 

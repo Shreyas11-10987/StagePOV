@@ -45,3 +45,10 @@ export interface EQBand {
   frequency: number;
   gain: number;
 }
+
+export interface VaultPlaylist {
+  id: string;
+  name: string;
+  songIds: string[];
+  dateCreated: number;
+}

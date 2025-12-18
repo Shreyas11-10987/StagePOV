@@ -1,6 +1,6 @@
 
-import React, { useState, useRef, useEffect } from 'react';
-import { AudioSettings, SpeakerPosition } from './types';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { AudioSettings, SpeakerPosition, VaultPlaylist } from './types';
 import { AUDIO_PRESETS, SPEAKER_LAYOUTS } from './constants';
 import { audioEngine } from './services/audioEngine';
 import { Visualizer } from './components/Visualizer';
@@ -49,10 +49,26 @@ const App: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  
+  // Vault & Library State
   const [vaultSongs, setVaultSongs] = useState<VaultSong[]>([]);
+  const [playlists, setPlaylists] = useState<VaultPlaylist[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   
+  // Sorting & Filtering
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'date' | 'name' | 'size'>('date');
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
+  
+  // Playlist Creation Mode
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedSongIds, setSelectedSongIds] = useState<Set<string>>(new Set());
+
+  // Playback Queue
+  const [playbackQueue, setPlaybackQueue] = useState<VaultSong[]>([]);
+
   const mediaRef = useRef<HTMLAudioElement>(null);
+  const vaultInputRef = useRef<HTMLInputElement>(null);
   const restoreTimeRef = useRef(0);
 
   // Sync restoreTimeRef with currentTime state so we can recover position after audio element unmount
@@ -91,7 +107,7 @@ const App: React.FC = () => {
     audioEngine.setBass(settings.bass);
     audioEngine.setTreble(settings.treble);
     audioEngine.setVocalClarity(settings.vocalClarity);
-    audioEngine.setReverb(settings.reverbLevel); // Manual Reverb Control
+    audioEngine.setReverb(settings.reverbLevel);
     audioEngine.setTheaterMode(settings.isTheaterMode);
     audioEngine.setDRC(settings.drc);
     audioEngine.setHeightLevel(settings.heightLevel);
@@ -100,7 +116,6 @@ const App: React.FC = () => {
     audioEngine.applyPreset(settings.selectedPreset);
     
     // CENTROID CALCULATION
-    // Calculate the acoustic center of all active speakers to position the sound source perfectly balanced.
     const activeSpeakers = speakers.filter(s => s.isActive);
     if (activeSpeakers.length > 0) {
       let sumX = 0, sumY = 0, sumZ = 0;
@@ -136,16 +151,56 @@ const App: React.FC = () => {
 
   const refreshVault = async () => {
     const songs = await vaultDb.getAllSongs();
+    const playlists = await vaultDb.getAllPlaylists();
     setVaultSongs(songs);
+    setPlaylists(playlists);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (mediaData?.url && !mediaData.id) URL.revokeObjectURL(mediaData.url);
-      const url = URL.createObjectURL(file);
-      setMediaData({ name: file.name.replace(/\.[^/.]+$/, ""), url });
-      setIsPlaying(false);
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // If multiple files are selected in Deck view, auto-save them to vault
+    if (files.length > 1) {
+      await handleVaultUpload(e);
+      alert(`${files.length} masters secured in Vault.`);
+      return;
+    }
+
+    // Single file logic (Preview Mode)
+    const file = files[0];
+    if (mediaData?.url && !mediaData.id) URL.revokeObjectURL(mediaData.url);
+    const url = URL.createObjectURL(file);
+    setMediaData({ name: file.name.replace(/\.[^/.]+$/, ""), url });
+    setIsPlaying(false);
+    setPlaybackQueue([]); // Clear queue on manual load
+  };
+
+  const handleVaultUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    setIsSaving(true);
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const songId = `song_${Date.now()}_${i}`;
+        await vaultDb.saveSong({
+          id: songId,
+          name: file.name.replace(/\.[^/.]+$/, ""),
+          blob: file,
+          size: file.size,
+          type: file.type,
+          dateAdded: Date.now()
+        });
+      }
+      await refreshVault();
+    } catch (err) {
+      console.error("Bulk Save Error:", err);
+    } finally {
+      setIsSaving(false);
+      // Reset input value to allow selecting the same files again if needed
+      if (e.target) e.target.value = '';
     }
   };
 
@@ -173,16 +228,46 @@ const App: React.FC = () => {
     }
   };
 
-  const loadFromVault = (song: VaultSong) => {
+  const playSongFromVault = (song: VaultSong, queue: VaultSong[] = []) => {
     if (mediaData?.url && !mediaData.id) URL.revokeObjectURL(mediaData.url);
     const url = URL.createObjectURL(song.blob);
     setMediaData({ name: song.name, url, id: song.id });
+    
+    // If a queue is provided, set it (excluding the current song which is playing)
+    if (queue.length > 0) {
+      const index = queue.findIndex(s => s.id === song.id);
+      if (index !== -1 && index < queue.length - 1) {
+        setPlaybackQueue(queue.slice(index + 1));
+      } else {
+        setPlaybackQueue([]);
+      }
+    } else {
+      setPlaybackQueue([]);
+    }
+
     setActiveView('deck');
+    setIsPlaying(true);
+  };
+
+  const onPlaybackEnded = () => {
+    if (playbackQueue.length > 0) {
+      const nextSong = playbackQueue[0];
+      playSongFromVault(nextSong, playbackQueue);
+    } else {
+      setIsPlaying(false);
+    }
   };
 
   const deleteFromVault = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     await vaultDb.deleteSong(id);
+    await refreshVault();
+  };
+
+  const deletePlaylist = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await vaultDb.deletePlaylist(id);
+    if (selectedPlaylistId === id) setSelectedPlaylistId(null);
     await refreshVault();
   };
 
@@ -196,6 +281,68 @@ const App: React.FC = () => {
       }
     }
   };
+
+  // --- Playlist Management Logic ---
+
+  const toggleSelectionMode = () => {
+    setIsSelectionMode(!isSelectionMode);
+    setSelectedSongIds(new Set());
+  };
+
+  const toggleSongSelection = (id: string) => {
+    const newSet = new Set(selectedSongIds);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setSelectedSongIds(newSet);
+  };
+
+  const createPlaylist = async () => {
+    if (selectedSongIds.size === 0) return;
+    const name = window.prompt("Enter Playlist Name:");
+    if (!name) return;
+
+    await vaultDb.savePlaylist({
+      id: `pl_${Date.now()}`,
+      name,
+      songIds: Array.from(selectedSongIds),
+      dateCreated: Date.now()
+    });
+
+    setIsSelectionMode(false);
+    setSelectedSongIds(new Set());
+    await refreshVault();
+  };
+
+  // --- Sorting & Filtering Logic ---
+  
+  const filteredAndSortedSongs = useMemo(() => {
+    let result = [...vaultSongs];
+
+    // Filter by Playlist if selected
+    if (selectedPlaylistId) {
+      const pl = playlists.find(p => p.id === selectedPlaylistId);
+      if (pl) {
+        const idSet = new Set(pl.songIds);
+        result = result.filter(s => idSet.has(s.id));
+      }
+    }
+
+    // Filter by Search
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(s => s.name.toLowerCase().includes(q));
+    }
+
+    // Sort
+    result.sort((a, b) => {
+      if (sortBy === 'name') return a.name.localeCompare(b.name);
+      if (sortBy === 'size') return b.size - a.size;
+      return b.dateAdded - a.dateAdded; // default date
+    });
+
+    return result;
+  }, [vaultSongs, playlists, selectedPlaylistId, searchQuery, sortBy]);
+
 
   const NavItem = ({ id, label, icon }: { id: typeof activeView, label: string, icon: React.ReactNode }) => (
     <button 
@@ -231,6 +378,7 @@ const App: React.FC = () => {
         src={mediaData?.url || ''}
         onPlay={() => setIsPlaying(true)} 
         onPause={() => setIsPlaying(false)} 
+        onEnded={onPlaybackEnded}
         onTimeUpdate={() => setCurrentTime(mediaRef.current?.currentTime || 0)} 
         onLoadedMetadata={() => setDuration(mediaRef.current?.duration || 0)} 
       />
@@ -281,7 +429,7 @@ const App: React.FC = () => {
                     </div>
                     <span className="text-lg font-black uppercase tracking-[0.4em] text-white">Upload New Master</span>
                     <p className="text-[10px] text-slate-500 mt-4 uppercase font-bold tracking-[0.2em]">Lossless 48kHz WAV/FLAC Preferred</p>
-                    <input type="file" className="hidden" accept="audio/*" onChange={handleFileUpload} />
+                    <input type="file" multiple className="hidden" accept="audio/*" onChange={handleFileUpload} />
                   </label>
                 ) : (
                   <div className="w-full flex flex-col items-center gap-12">
@@ -382,61 +530,188 @@ const App: React.FC = () => {
           )}
 
           {activeView === 'vault' && (
-            <div className="max-w-6xl mx-auto space-y-16 w-full animate-in fade-in duration-500">
-               <header className="flex flex-col md:flex-row justify-between items-end md:items-center gap-6 border-b border-white/5 pb-12">
+            <div className="max-w-7xl mx-auto space-y-8 w-full animate-in fade-in duration-500 h-full flex flex-col">
+               <header className="flex flex-col xl:flex-row justify-between items-start xl:items-end gap-6 border-b border-white/5 pb-8 shrink-0">
                   <div className="space-y-2">
                     <h2 className="text-4xl font-black italic tracking-tighter uppercase text-white">The <span className="text-blue-500">Vault</span></h2>
                     <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em]">BROWSER-CLOUD PERSISTENT STORAGE</p>
                   </div>
+
+                  <div className="flex flex-col md:flex-row gap-4 w-full xl:w-auto">
+                    <div className="relative group flex-1 md:flex-none">
+                      <input 
+                        type="text" 
+                        placeholder="FILTER LIBRARY..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 pl-10 text-[10px] font-black uppercase tracking-widest text-white placeholder-slate-600 outline-none focus:border-blue-500/50 w-full md:w-64 transition-all"
+                      />
+                      <svg className="w-4 h-4 text-slate-600 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    </div>
+
+                    <div className="flex gap-2">
+                      {(['date', 'name', 'size'] as const).map(mode => (
+                        <button 
+                          key={mode}
+                          onClick={() => setSortBy(mode)}
+                          className={`px-4 py-3 rounded-xl border text-[9px] font-black uppercase tracking-widest transition-all ${sortBy === mode ? 'bg-blue-600 text-white border-blue-500' : 'bg-white/5 border-white/10 text-slate-500 hover:bg-white/10'}`}
+                        >
+                          {mode}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="h-full w-px bg-white/10 mx-2 hidden md:block"></div>
+
+                    {/* Hidden Input for Vault Upload */}
+                    <input 
+                      type="file" 
+                      multiple 
+                      accept="audio/*" 
+                      className="hidden" 
+                      ref={vaultInputRef}
+                      onChange={handleVaultUpload}
+                    />
+
+                    {isSelectionMode ? (
+                      <div className="flex gap-2 animate-in fade-in">
+                        <button 
+                          onClick={createPlaylist}
+                          disabled={selectedSongIds.size === 0}
+                          className="px-6 py-3 rounded-xl bg-green-600 text-white font-black text-[9px] uppercase tracking-widest shadow-lg hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                        >
+                          Save Playlist ({selectedSongIds.size})
+                        </button>
+                        <button 
+                          onClick={toggleSelectionMode}
+                          className="px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-white font-black text-[9px] uppercase tracking-widest transition-all"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => vaultInputRef.current?.click()}
+                          className="px-6 py-3 rounded-xl bg-white/5 border border-white/10 text-white hover:bg-white/10 font-black text-[9px] uppercase tracking-widest transition-all flex items-center gap-2"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                          Import Audio
+                        </button>
+                        <button 
+                          onClick={toggleSelectionMode}
+                          className="px-6 py-3 rounded-xl bg-white/5 border border-white/10 text-blue-400 hover:bg-blue-600/20 hover:border-blue-500/30 font-black text-[9px] uppercase tracking-widest transition-all flex items-center gap-2"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+                          New Playlist
+                        </button>
+                      </div>
+                    )}
+                  </div>
                </header>
                
-               {vaultSongs.length === 0 ? (
-                 <div className="py-32 text-center border-2 border-dashed border-white/5 rounded-[3rem] bg-white/[0.01]">
-                    <div className="text-slate-600 space-y-4">
-                      <svg className="w-12 h-12 mx-auto opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/></svg>
-                      <p className="text-[10px] font-black uppercase tracking-widest">Your cloud vault is currently empty</p>
-                    </div>
+               <div className="flex-1 flex flex-col md:flex-row gap-8 min-h-0">
+                 {/* Playlists Sidebar */}
+                 <div className="w-full md:w-64 shrink-0 flex flex-col gap-4 overflow-y-auto custom-scroll pr-2">
+                   <div 
+                     onClick={() => setSelectedPlaylistId(null)}
+                     className={`p-4 rounded-xl border cursor-pointer transition-all ${selectedPlaylistId === null ? 'bg-white/10 border-white/20 text-white' : 'bg-white/5 border-transparent text-slate-500 hover:bg-white/10'}`}
+                   >
+                     <div className="flex justify-between items-center">
+                       <span className="text-[10px] font-black uppercase tracking-widest">All Songs</span>
+                       <span className="text-[9px] font-mono opacity-50">{vaultSongs.length}</span>
+                     </div>
+                   </div>
+
+                   {playlists.length > 0 && <div className="h-px bg-white/5 my-2"></div>}
+                   
+                   {playlists.map(pl => (
+                     <div 
+                       key={pl.id}
+                       onClick={() => setSelectedPlaylistId(pl.id)}
+                       className={`p-4 rounded-xl border cursor-pointer transition-all group relative ${selectedPlaylistId === pl.id ? 'bg-blue-600/20 border-blue-500/30 text-white' : 'bg-white/5 border-transparent text-slate-500 hover:bg-white/10'}`}
+                     >
+                       <div className="flex justify-between items-center">
+                         <span className="text-[10px] font-black uppercase tracking-widest truncate pr-4">{pl.name}</span>
+                         <span className="text-[9px] font-mono opacity-50">{pl.songIds.length}</span>
+                       </div>
+                       <button 
+                         onClick={(e) => deletePlaylist(pl.id, e)}
+                         className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-red-500/20 text-red-400 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500 hover:text-white"
+                       >
+                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                       </button>
+                     </div>
+                   ))}
                  </div>
-               ) : (
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {vaultSongs.map(song => (
-                      <div 
-                        key={song.id} 
-                        onClick={() => loadFromVault(song)}
-                        className={`group relative p-8 rounded-[2.5rem] bg-white/[0.03] border border-white/5 hover:border-blue-500/30 transition-all cursor-pointer flex items-center justify-between ${mediaData?.id === song.id ? 'border-blue-500 ring-1 ring-blue-500/20' : ''}`}
-                      >
-                         <div className="flex items-center gap-6">
-                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all ${mediaData?.id === song.id ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-500 group-hover:bg-white/10'}`}>
-                               {mediaData?.id === song.id && isPlaying ? (
-                                 <div className="flex items-end gap-0.5 h-6">
-                                   <div className="w-1 bg-white animate-[bounce_1s_infinite]"></div>
-                                   <div className="w-1 bg-white animate-[bounce_1.2s_infinite]"></div>
-                                   <div className="w-1 bg-white animate-[bounce_0.8s_infinite]"></div>
-                                 </div>
-                               ) : (
-                                 <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                               )}
-                            </div>
-                            <div>
-                               <h4 className="text-lg font-black italic tracking-tight uppercase truncate max-w-[200px]">{song.name}</h4>
-                               <div className="flex items-center gap-3 mt-1">
-                                 <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{(song.size / 1024 / 1024).toFixed(1)} MB</span>
-                                 <span className="text-slate-700">•</span>
-                                 <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{new Date(song.dateAdded).toLocaleDateString()}</span>
-                               </div>
-                            </div>
-                         </div>
-                         
-                         <button 
-                           onClick={(e) => deleteFromVault(song.id, e)}
-                           className="p-3 rounded-xl bg-white/0 hover:bg-red-500/10 text-slate-800 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
-                         >
-                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                         </button>
+
+                 {/* Song Grid */}
+                 <div className="flex-1 overflow-y-auto custom-scroll">
+                    {filteredAndSortedSongs.length === 0 ? (
+                      <div className="py-20 text-center border-2 border-dashed border-white/5 rounded-[2rem] bg-white/[0.01]">
+                          <div className="text-slate-600 space-y-4">
+                            <p className="text-[10px] font-black uppercase tracking-widest">No songs found in this view</p>
+                          </div>
                       </div>
-                    ))}
+                    ) : (
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          {filteredAndSortedSongs.map(song => (
+                            <div 
+                              key={song.id} 
+                              onClick={() => isSelectionMode ? toggleSongSelection(song.id) : playSongFromVault(song, filteredAndSortedSongs)}
+                              className={`group relative p-6 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                                isSelectionMode 
+                                  ? selectedSongIds.has(song.id) 
+                                    ? 'bg-blue-600/20 border-blue-500' 
+                                    : 'bg-white/[0.02] border-white/5 hover:border-white/20'
+                                  : mediaData?.id === song.id 
+                                    ? 'bg-blue-600/10 border-blue-500 ring-1 ring-blue-500/20' 
+                                    : 'bg-white/[0.03] border-white/5 hover:border-blue-500/30'
+                              }`}
+                            >
+                              <div className="flex items-center gap-5 overflow-hidden">
+                                  {isSelectionMode ? (
+                                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center border transition-all ${selectedSongIds.has(song.id) ? 'bg-blue-500 border-blue-500 text-white' : 'border-white/20 bg-black/40'}`}>
+                                      {selectedSongIds.has(song.id) && <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"/></svg>}
+                                    </div>
+                                  ) : (
+                                    <div className={`w-12 h-12 shrink-0 rounded-xl flex items-center justify-center transition-all ${mediaData?.id === song.id ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-500 group-hover:bg-white/10'}`}>
+                                      {mediaData?.id === song.id && isPlaying ? (
+                                        <div className="flex items-end gap-0.5 h-4">
+                                          <div className="w-1 bg-white animate-[bounce_1s_infinite]"></div>
+                                          <div className="w-1 bg-white animate-[bounce_1.2s_infinite]"></div>
+                                          <div className="w-1 bg-white animate-[bounce_0.8s_infinite]"></div>
+                                        </div>
+                                      ) : (
+                                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                      )}
+                                    </div>
+                                  )}
+                                  
+                                  <div className="min-w-0">
+                                    <h4 className={`text-sm font-black italic tracking-tight uppercase truncate ${mediaData?.id === song.id ? 'text-blue-400' : 'text-slate-200'}`}>{song.name}</h4>
+                                    <div className="flex items-center gap-3 mt-1">
+                                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{(song.size / 1024 / 1024).toFixed(1)} MB</span>
+                                      <span className="text-slate-700">•</span>
+                                      <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">{new Date(song.dateAdded).toLocaleDateString()}</span>
+                                    </div>
+                                  </div>
+                              </div>
+                              
+                              {!isSelectionMode && (
+                                <button 
+                                  onClick={(e) => deleteFromVault(song.id, e)}
+                                  className="p-2 rounded-lg bg-white/0 hover:bg-red-500/10 text-slate-700 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                      </div>
+                    )}
                  </div>
-               )}
+               </div>
             </div>
           )}
 

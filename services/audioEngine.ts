@@ -11,37 +11,43 @@ export class AudioEngine {
   private trebleFilter: BiquadFilterNode | null = null;
   private theaterBoost: BiquadFilterNode | null = null;
   private vocalFilter: BiquadFilterNode | null = null;
-  private absorptionFilter: BiquadFilterNode | null = null;
-  
-  // Height Channel Simulator (Atmos height virtualization)
   private heightFilter: BiquadFilterNode | null = null;
+  private bitCrusher: ScriptProcessorNode | null = null;
 
-  async init(element: HTMLMediaElement) {
-    if (this.context) return;
-    
+  async init(element: HTMLMediaElement, sampleRate: number = 96000, bitDepth: number = 32) {
+    // Close existing context to allow sample rate change
+    if (this.context) {
+      if (this.context.state !== 'closed') {
+        await this.context.close();
+      }
+      this.context = null;
+    }
+
     this.context = new (window.AudioContext || (window as any).webkitAudioContext)({
       latencyHint: 'playback',
-      sampleRate: 48000
+      sampleRate: sampleRate
     });
-    
+
+    // Create Source
     this.source = this.context.createMediaElementSource(element);
     
-    this.gainNode = this.context.createGain();
+    // Create Analyser
     this.analyser = this.context.createAnalyser();
-    this.analyser.fftSize = 256;
+    this.analyser.fftSize = 1024;
 
+    // Create Gain
+    this.gainNode = this.context.createGain();
+
+    // Create Compressor
     this.compressor = this.context.createDynamicsCompressor();
     this.compressor.threshold.value = -24;
     this.compressor.knee.value = 30;
     this.compressor.ratio.value = 12;
-    this.compressor.attack.value = 0.003;
-    this.compressor.release.value = 0.25;
 
+    // Filters
     this.vocalFilter = this.context.createBiquadFilter();
     this.vocalFilter.type = 'peaking';
     this.vocalFilter.frequency.value = 3200;
-    this.vocalFilter.Q.value = 1.2; 
-    this.vocalFilter.gain.value = 0;
 
     this.bassFilter = this.context.createBiquadFilter();
     this.bassFilter.type = 'lowshelf';
@@ -51,41 +57,50 @@ export class AudioEngine {
     this.trebleFilter.type = 'highshelf';
     this.trebleFilter.frequency.value = 6000;
 
-    // Atmos Height Virtualization Filter
-    // Height perception is largely driven by frequency dips/peaks in the 7kHz-12kHz range (HRTF cues)
     this.heightFilter = this.context.createBiquadFilter();
     this.heightFilter.type = 'peaking';
-    this.heightFilter.frequency.value = 8000;
-    this.heightFilter.Q.value = 0.7;
-    this.heightFilter.gain.value = 0;
+    this.heightFilter.frequency.value = 10000;
 
     this.theaterBoost = this.context.createBiquadFilter();
     this.theaterBoost.type = 'peaking';
     this.theaterBoost.frequency.value = 50;
-    this.theaterBoost.Q.value = 0.8;
-    this.theaterBoost.gain.value = 0;
 
-    this.absorptionFilter = this.context.createBiquadFilter();
-    this.absorptionFilter.type = 'lowpass';
-    this.absorptionFilter.frequency.value = 20000;
+    // Bit Depth Simulator (32-bit is passthrough)
+    this.bitCrusher = this.context.createScriptProcessor(4096, 2, 2);
+    this.bitCrusher.onaudioprocess = (e) => {
+      const inputL = e.inputBuffer.getChannelData(0);
+      const inputR = e.inputBuffer.getChannelData(1);
+      const outputL = e.outputBuffer.getChannelData(0);
+      const outputR = e.outputBuffer.getChannelData(1);
+      
+      if (bitDepth >= 32) {
+        outputL.set(inputL);
+        outputR.set(inputR);
+        return;
+      }
 
+      const step = Math.pow(0.5, bitDepth - 1);
+      for (let i = 0; i < inputL.length; i++) {
+        outputL[i] = Math.round(inputL[i] / step) * step;
+        outputR[i] = Math.round(inputR[i] / step) * step;
+      }
+    };
+
+    // Spatializer
     this.panner = this.context.createPanner();
     this.panner.panningModel = 'HRTF';
     this.panner.distanceModel = 'inverse';
-    this.panner.refDistance = 1;
-    this.panner.maxDistance = 10000;
-    this.panner.rolloffFactor = 1;
 
-    // Signal Chain
+    // Connection Chain
     this.source
       .connect(this.bassFilter)
       .connect(this.trebleFilter)
       .connect(this.heightFilter)
       .connect(this.theaterBoost)
       .connect(this.vocalFilter)
+      .connect(this.bitCrusher)
       .connect(this.compressor)
       .connect(this.panner)
-      .connect(this.absorptionFilter)
       .connect(this.gainNode)
       .connect(this.analyser)
       .connect(this.context.destination);
@@ -121,11 +136,9 @@ export class AudioEngine {
     }
   }
 
-  // Atmos specific height intensity adjustment
   setHeightLevel(value: number) {
     if (this.heightFilter && this.context) {
-      // Height virtualization via high-freq presence boost
-      const gain = value * 6;
+      const gain = value * 10;
       this.heightFilter.gain.setTargetAtTime(gain, this.context.currentTime, 0.1);
     }
   }
@@ -133,16 +146,9 @@ export class AudioEngine {
   setSpatialPosition(x: number, y: number, z: number) {
     if (this.panner && this.context) {
       const time = this.context.currentTime;
-      const multiplier = 4;
-      this.panner.positionX.setTargetAtTime(x * multiplier, time, 0.08);
-      this.panner.positionY.setTargetAtTime(y * multiplier, time, 0.08);
-      this.panner.positionZ.setTargetAtTime(z * multiplier, time, 0.08);
-
-      // Adjust height filter based on Y position (Atmos Object processing)
-      if (this.heightFilter) {
-        const heightCue = y * 4; // Higher objects get more height cue filtering
-        this.heightFilter.gain.setTargetAtTime(heightCue, time, 0.1);
-      }
+      this.panner.positionX.setTargetAtTime(x * 5, time, 0.1);
+      this.panner.positionY.setTargetAtTime(y * 5, time, 0.1);
+      this.panner.positionZ.setTargetAtTime(z * 5, time, 0.1);
     }
   }
 
@@ -155,6 +161,10 @@ export class AudioEngine {
 
   resume() {
     this.context?.resume();
+  }
+
+  isActive() {
+    return !!this.context;
   }
 }
 

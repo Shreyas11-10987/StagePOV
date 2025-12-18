@@ -16,6 +16,9 @@ export interface AudioSettings {
   drc: number; // Dynamic Range Compression
   lfeCrossover: number;
   centerSpread: number;
+  // Quality Settings
+  bitDepth: 16 | 24 | 32;
+  sampleRate: number;
 }
 
 export interface SpeakerPosition {
